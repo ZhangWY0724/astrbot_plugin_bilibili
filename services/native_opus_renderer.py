@@ -183,15 +183,22 @@ class NativeOpusRenderer:
                 await self._stop_playwright_driver()
                 if (
                     attempt == 0
-                    and self._is_browser_missing_error(exc)
-                    and await self._install_chromium()
+                    and (
+                        self._is_browser_missing_error(exc)
+                        or self._is_browser_dependency_error(exc)
+                    )
+                    and await self._install_chromium(
+                        include_system_deps=sys.platform.startswith("linux")
+                    )
                 ):
                     continue
                 self._disabled_reason = str(exc)
+                error = str(exc)
+                if self.proxy:
+                    error = error.replace(self.proxy, "[代理地址已隐藏]")
                 logger.error(
                     "原生动态 Chromium 启动失败，将降级使用卡片或纯文本。"
-                    "若为 Linux 系统依赖缺失，请在宿主环境执行 "
-                    "`playwright install-deps chromium`。"
+                    f" error={error}"
                 )
                 return False
         return False
@@ -205,17 +212,41 @@ class NativeOpusRenderer:
             or "browser was not found" in message
         )
 
-    async def _install_chromium(self) -> bool:
+    @staticmethod
+    def _is_browser_dependency_error(exc: Exception) -> bool:
+        message = str(exc).lower()
+        return (
+            "host system is missing dependencies" in message
+            or "missing libraries" in message
+            or "error while loading shared libraries" in message
+            or "cannot open shared object file" in message
+        )
+
+    @staticmethod
+    def _build_install_command(include_system_deps: bool) -> tuple[str, ...]:
+        command = [sys.executable, "-m", "playwright", "install"]
+        if include_system_deps:
+            command.append("--with-deps")
+        command.append("chromium")
+        return tuple(command)
+
+    async def _install_chromium(self, include_system_deps: bool = False) -> bool:
         if self.install_mode != "auto" or self._install_attempted:
             if self.install_mode == "manual":
+                install_option = " --with-deps" if include_system_deps else ""
                 logger.warning(
-                    "未检测到 Playwright Chromium，请执行 "
-                    "`python -m playwright install chromium`。"
+                    "Playwright Chromium 运行环境不完整，请执行 "
+                    f"`python -m playwright install{install_option} chromium`。"
                 )
             return False
 
         self._install_attempted = True
-        logger.warning("未检测到 Playwright Chromium，开始首次安装。")
+        if include_system_deps:
+            logger.warning(
+                "Playwright Chromium 或其 Linux 系统依赖不完整，开始自动安装。"
+            )
+        else:
+            logger.warning("未检测到 Playwright Chromium，开始首次安装。")
         env = os.environ.copy()
         if self.proxy:
             env.setdefault("HTTPS_PROXY", self.proxy)
@@ -223,11 +254,7 @@ class NativeOpusRenderer:
 
         try:
             process = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "playwright",
-                "install",
-                "chromium",
+                *self._build_install_command(include_system_deps),
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
                 env=env,
@@ -244,12 +271,15 @@ class NativeOpusRenderer:
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
-            logger.error("Playwright Chromium 安装超时。")
+            logger.error("Playwright Chromium 运行环境安装超时。")
             return False
         if return_code != 0:
-            logger.error(f"Playwright Chromium 安装失败，退出码: {return_code}")
+            logger.error(
+                f"Playwright Chromium 运行环境安装失败，退出码: {return_code}。"
+                "请确认容器基于 Debian/Ubuntu、以 root 运行且软件源网络可用。"
+            )
             return False
-        logger.info("Playwright Chromium 安装完成。")
+        logger.info("Playwright Chromium 运行环境安装完成。")
         return True
 
     async def _capture(self, context, dyn_id: str) -> Optional[str]:

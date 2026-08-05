@@ -41,7 +41,7 @@ plugin i https://github.com/ZhangWY0724/astrbot_plugin_bilibili
 
 `native` 模式失败时会自动降级为 `card`，卡片也失败时再降级为纯文本。原生模式首次使用可能需要下载 Chromium；可通过 `native_browser_install` 选择 `auto`、`manual` 或 `disable`。Python 依赖由插件目录下的 `requirements.txt` 按 AstrBot 规范安装，Chromium 浏览器运行时不打包进插件仓库。
 
-启用 `native` 后，插件加载完成会在后台自动准备 Playwright Chromium；因此 Python 的 `playwright` 依赖安装成功后，会在插件启动阶段继续自动下载 Chromium，不必等到第一条订阅推送才开始。下载失败不会阻止插件启动，并会按上述规则降级渲染。
+启用 `native` 后，插件加载完成会在后台自动准备 Playwright Chromium；因此 Python 的 `playwright` 依赖安装成功后，会在插件启动阶段继续自动下载 Chromium，不必等到第一条订阅推送才开始。Linux 环境使用 `auto` 时还会自动补齐 Chromium 系统运行库，适配以 root 运行的 Debian/Ubuntu Docker 容器。下载或系统依赖安装失败不会阻止插件启动，并会按上述规则降级渲染。
 
 原生渲染使用配置项 `proxy`，与 Bilibili API 请求共用代理；扫码登录和持久化凭据会转换为浏览器 Cookie 使用，不会新增登录体系。
 

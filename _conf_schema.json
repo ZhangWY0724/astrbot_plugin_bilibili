@@ -46,7 +46,7 @@
     "native_browser_install": {
         "description": "原生渲染浏览器安装策略",
         "type": "string",
-        "hint": "auto 首次使用时自动安装 Chromium；manual 仅提示手动安装；disable 禁用原生浏览器。",
+        "hint": "auto 首次使用时自动安装 Chromium，并在 Linux 下自动补齐系统运行库；manual 仅提示手动安装；disable 禁用原生浏览器。",
         "options": ["auto", "manual", "disable"],
         "default": "auto"
     },

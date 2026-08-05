@@ -270,7 +270,7 @@ UID -> [(UMO, SubscriptionRecord), ...]
 
 原生模式不改变动态 API 的新旧判断和过滤逻辑，只把已通过过滤的动态 ID 转换为固定的 `opus/{dyn_id}` 地址。浏览器上下文使用现有扫码登录或 `sessdata` 凭据对应的 Cookie，并复用 `proxy`。
 
-首次启动时若缺少 Chromium，`native_browser_install=auto` 会尝试执行固定命令 `python -m playwright install chromium`；`manual` 只记录安装提示；`disable` 不启动浏览器。安装或启动失败不会终止订阅轮询。
+首次启动时若缺少 Chromium，或启动错误表明 Linux 共享库缺失，`native_browser_install=auto` 会自动修复运行环境。Linux 执行 `python -m playwright install --with-deps chromium`，其他系统执行 `python -m playwright install chromium`；`manual` 只记录对应的手动安装提示；`disable` 不启动浏览器。安装或启动失败不会终止订阅轮询。
 
 页面等待顺序为：DOM 加载、`.bili-opus-view` 可见、字体就绪、容器内图片加载、布局稳定，随后执行元素级 JPEG 截图。
 

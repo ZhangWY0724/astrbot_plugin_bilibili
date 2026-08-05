@@ -74,12 +74,38 @@ class CookieMappingTests(unittest.TestCase):
 
 
 class BrowserRuntimeTests(unittest.TestCase):
-    def test_only_missing_executable_triggers_browser_install(self):
+    def test_detects_missing_executable(self):
         self.assertTrue(
             MODULE.NativeOpusRenderer._is_browser_missing_error(
                 RuntimeError("Executable doesn't exist at /cache/chromium")
             )
         )
+
+    def test_detects_missing_linux_browser_dependencies(self):
+        self.assertTrue(
+            MODULE.NativeOpusRenderer._is_browser_dependency_error(
+                RuntimeError(
+                    "Host system is missing dependencies to run browsers. "
+                    "Missing libraries: libnss3.so"
+                )
+            )
+        )
+        self.assertTrue(
+            MODULE.NativeOpusRenderer._is_browser_dependency_error(
+                RuntimeError(
+                    "error while loading shared libraries: libgbm.so.1: "
+                    "cannot open shared object file"
+                )
+            )
+        )
+
+    def test_linux_install_command_includes_system_dependencies(self):
+        command = MODULE.NativeOpusRenderer._build_install_command(True)
+        self.assertEqual(command[-3:], ("install", "--with-deps", "chromium"))
+
+    def test_non_linux_install_command_only_installs_browser(self):
+        command = MODULE.NativeOpusRenderer._build_install_command(False)
+        self.assertEqual(command[-2:], ("install", "chromium"))
 
 
 class _FakeContainer:
