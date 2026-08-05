@@ -11,6 +11,8 @@ from astrbot.api import logger
 
 OPUS_URL_TEMPLATE = "https://www.bilibili.com/opus/{dyn_id}"
 OPUS_SELECTOR = ".bili-opus-view"
+OBSTRUCTIVE_POPOVER_SELECTOR = ".v-popover-content"
+FORCED_TEST_DYN_ID = "1232710769951375376"
 NATIVE_VIEWPORT_WIDTH = 1920
 NATIVE_VIEWPORT_HEIGHT = 1080
 NATIVE_DEVICE_SCALE_FACTOR = 1
@@ -292,12 +294,23 @@ class NativeOpusRenderer:
         page = await context.new_page()
         output_path = ""
         try:
-            url = OPUS_URL_TEMPLATE.format(dyn_id=dyn_id)
+            url = OPUS_URL_TEMPLATE.format(dyn_id=FORCED_TEST_DYN_ID)
             await page.goto(
                 url, wait_until="domcontentloaded", timeout=self.timeout_ms
             )
             container = page.locator(OPUS_SELECTOR).first
             await container.wait_for(state="visible", timeout=self.timeout_ms)
+            await page.evaluate(
+                """selector => {
+                    document.querySelectorAll(selector).forEach(
+                        element => element.remove()
+                    );
+                    const style = document.createElement('style');
+                    style.textContent = `${selector} { display: none !important; }`;
+                    document.head.appendChild(style);
+                }""",
+                OBSTRUCTIVE_POPOVER_SELECTOR,
+            )
             await page.evaluate("() => document.fonts.ready")
             try:
                 await page.wait_for_function(

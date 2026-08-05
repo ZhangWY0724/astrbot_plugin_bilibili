@@ -161,6 +161,7 @@ class _FakePage:
         self.container = _FakeContainer()
         self.goto_url = ""
         self.closed = False
+        self.evaluate_calls = []
 
     async def goto(self, url, **_kwargs):
         self.goto_url = url
@@ -169,7 +170,8 @@ class _FakePage:
         assert selector == MODULE.OPUS_SELECTOR
         return _FakeLocator(self.container)
 
-    async def evaluate(self, _expression):
+    async def evaluate(self, expression, arg=None):
+        self.evaluate_calls.append((expression, arg))
         return None
 
     async def wait_for_function(self, *_args, **_kwargs):
@@ -188,13 +190,21 @@ class _FakeContext:
 
 
 class CaptureTests(unittest.IsolatedAsyncioTestCase):
-    async def test_capture_uses_fixed_opus_url_and_tracks_output(self):
+    async def test_capture_uses_forced_test_opus_and_removes_login_popover(self):
         renderer = MODULE.NativeOpusRenderer(lambda: {}, install_mode="manual")
         context = _FakeContext()
         output_path = await renderer._capture(context, "123456")
 
         self.assertEqual(
-            context.page.goto_url, "https://www.bilibili.com/opus/123456"
+            context.page.goto_url,
+            "https://www.bilibili.com/opus/1232710769951375376",
+        )
+        self.assertTrue(
+            any(
+                arg == MODULE.OBSTRUCTIVE_POPOVER_SELECTOR
+                and "element.remove()" in expression
+                for expression, arg in context.page.evaluate_calls
+            )
         )
         self.assertTrue(context.page.closed)
         self.assertTrue(output_path and os.path.exists(output_path))
