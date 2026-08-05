@@ -3,13 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from inspect import isawaitable
 import time
-from typing import Any, Awaitable, Callable, Literal, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from astrbot.api import logger
 from astrbot.api.event import MessageEventResult
 from astrbot.api.message_components import Node
 
-NotificationCategory = Literal["dynamic", "live"]
 SentHook = Callable[["SubscriptionNotification"], None | Awaitable[None]]
 
 
@@ -18,7 +17,6 @@ class SubscriptionNotification:
     sub_user: str
     chain_parts: list[Any]
     send_node: bool = False
-    category: NotificationCategory = "dynamic"
     dyn_id: Optional[str] = None
     meta: dict[str, Any] = field(default_factory=dict)
 
@@ -50,7 +48,7 @@ class SubscriptionNotificationDispatcher:
         except Exception as e:
             logger.error(
                 f"发送订阅通知失败: sub_user={notification.sub_user} "
-                f"category={notification.category} dyn_id={notification.dyn_id} "
+                f"dyn_id={notification.dyn_id} "
                 f"error={e}"
             )
             return DispatchResult(sent=False, reason=str(e))
@@ -69,13 +67,11 @@ class SubscriptionNotificationDispatcher:
             await result
 
     def _is_silent(self, notification: SubscriptionNotification) -> bool:
-        if notification.category not in ("dynamic", "live"):
-            return False
         now_ts = max(int(time.time()), 0)
         if now_ts >= self.silent_until_ts:
             return False
         logger.info(
-            f"订阅通知被静默丢弃: sub_user={notification.sub_user} category={notification.category} dyn_id={notification.dyn_id}"
+            f"订阅通知被静默丢弃: sub_user={notification.sub_user} dyn_id={notification.dyn_id}"
         )
         return True
 

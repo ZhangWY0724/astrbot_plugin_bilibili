@@ -192,12 +192,9 @@ class DynamicParseResult:
 class SubscriptionRecord:
     uid: int
     last: str = ""
-    is_live: bool = False
     filter_types: List[str] = field(default_factory=list)
     filter_regex: List[str] = field(default_factory=list)
     recent_ids: List[str] = field(default_factory=list)
-    live_atall: bool = False
-    last_live_start_ts: int = 0
     at_all: bool = False
     at_sub_users: List[str] = field(default_factory=list)
 
@@ -209,12 +206,13 @@ class SubscriptionRecord:
         return cls(
             uid=uid,
             last=str(raw.get("last", "") or ""),
-            is_live=_to_bool(raw.get("is_live", False)),
-            filter_types=_to_str_list(raw.get("filter_types")),
+            filter_types=[
+                value
+                for value in _to_str_list(raw.get("filter_types"))
+                if value != "live"
+            ],
             filter_regex=_to_str_list(raw.get("filter_regex")),
             recent_ids=_to_str_list(raw.get("recent_ids")),
-            live_atall=_to_bool(raw.get("live_atall", False)),
-            last_live_start_ts=max(0, _to_int(raw.get("last_live_start_ts", 0))),
             at_all=_to_bool(raw.get("at_all", False)),
             at_sub_users=_to_str_list(raw.get("at_sub_users")),
         )
@@ -223,12 +221,9 @@ class SubscriptionRecord:
         return {
             "uid": self.uid,
             "last": self.last,
-            "is_live": self.is_live,
             "filter_types": list(self.filter_types),
             "filter_regex": list(self.filter_regex),
             "recent_ids": list(self.recent_ids),
-            "live_atall": self.live_atall,
-            "last_live_start_ts": self.last_live_start_ts,
             "at_all": self.at_all,
             "at_sub_users": list(self.at_sub_users),
         }
@@ -237,7 +232,6 @@ class SubscriptionRecord:
         self,
         filter_types: List[str],
         filter_regex: List[str],
-        live_atall: bool,
         at_all: Optional[bool] = None,
         add_sub_users: Optional[List[str]] = None,
         rm_sub_users: Optional[List[str]] = None,
@@ -246,7 +240,6 @@ class SubscriptionRecord:
         if not inherit_filters:
             self.filter_types = list(filter_types)
             self.filter_regex = list(filter_regex)
-        self.live_atall = bool(live_atall)
         if at_all is not None:
             self.at_all = bool(at_all)
 

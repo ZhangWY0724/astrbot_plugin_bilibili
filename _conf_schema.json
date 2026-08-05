@@ -33,7 +33,7 @@
     "rai": {
         "description": "render_as_image",
         "type": "bool",
-        "hint": "是否以图片形式渲染动态与直播推送",
+        "hint": "是否以图片形式渲染动态推送",
         "default": true
     },
     "renderer_template": {
@@ -71,18 +71,6 @@
         "description": "纯文本推送转发内容模板",
         "type": "text",
         "hint": "非图片推送模式下的转发内容模板，留空使用默认格式。可用变量: {name} {uid} {title} {text} {url}，数据来源为被转发的原动态。",
-        "default": ""
-    },
-    "enable_ai_summary": {
-        "description": "enable_ai_summary",
-        "type": "bool",
-        "hint": "是否在动态推送后额外调用 AI 生成摘要",
-        "default": false
-    },
-    "ai_summary_prompt": {
-        "description": "ai_summary_prompt",
-        "type": "text",
-        "hint": "可选，AI 摘要提示词模板。可使用 {content} 代表组装后的动态内容。留空使用内置默认提示词。",
         "default": ""
     }
 }

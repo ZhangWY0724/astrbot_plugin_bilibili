@@ -22,7 +22,6 @@ from .core.constant import (
     AT_SUB_OPTION,
     CARD_TEMPLATES,
     DEFAULT_TEMPLATE,
-    LIVE_ATALL_OPTION,
     LOGO_PATH,
     RECENT_DYNAMIC_CACHE,
     RECONNECT_SILENT_PADDING_SECS,
@@ -144,20 +143,20 @@ class Main(Star):
     @staticmethod
     def _parse_sub_args(
         input_text: GreedyStr,
-    ) -> tuple[List[str], List[str], bool, bool, bool, bool]:
+    ) -> tuple[List[str], List[str], bool, bool, bool]:
         args = input_text.strip().split(" ") if input_text.strip() else []
         filter_types: List[str] = []
         filter_regex: List[str] = []
-        live_atall = False
         at_all = False
         at_sub = False
         unat_sub = False
 
         for arg in args:
+            if arg in {"live", "live_atall"}:
+                # 兼容旧命令参数，直播功能移除后不再保存为过滤正则。
+                continue
             if arg in VALID_SUB_OPTIONS:
-                if arg == LIVE_ATALL_OPTION:
-                    live_atall = True
-                elif arg == AT_ALL_OPTION:
+                if arg == AT_ALL_OPTION:
                     at_all = True
                 elif arg == AT_SUB_OPTION:
                     at_sub = True
@@ -169,13 +168,12 @@ class Main(Star):
             else:
                 filter_regex.append(arg)
 
-        return filter_types, filter_regex, live_atall, at_all, at_sub, unat_sub
+        return filter_types, filter_regex, at_all, at_sub, unat_sub
 
     @staticmethod
     def _build_filter_desc(
         filter_types: List[str],
         filter_regex: List[str],
-        live_atall: bool,
         at_all: bool = False,
         at_sub_users_len: int = 0,
     ) -> str:
@@ -184,10 +182,6 @@ class Main(Star):
             filter_desc += f"<br>过滤类型: {', '.join(filter_types)}"
         if filter_regex:
             filter_desc += f"<br>过滤正则: {filter_regex}"
-        if live_atall:
-            filter_desc += "<br>直播开播@全体: 开启"
-        else:
-            filter_desc += "<br>直播开播@全体: 关闭"
         if at_all:
             filter_desc += "<br>@全体成员: 开启"
         else:
@@ -243,7 +237,6 @@ class Main(Star):
         uid_int: int,
         filter_types: List[str],
         filter_regex: List[str],
-        live_atall: bool,
         at_all: bool | None = None,
         add_sub_users: List[str] | None = None,
         rm_sub_users: List[str] | None = None,
@@ -254,15 +247,13 @@ class Main(Star):
             uid_int,
             filter_types,
             filter_regex,
-            live_atall,
             at_all=at_all,
             add_sub_users=add_sub_users,
             rm_sub_users=rm_sub_users,
             inherit_filters=inherit_filters,
         )
         if result.updated:
-            option_desc = "开启" if live_atall else "关闭"
-            return True, f"该动态已订阅，已更新过滤条件。直播@全体: {option_desc}"
+            return True, "该动态已订阅，已更新过滤条件和提醒设置。"
         return False, ""
 
     @command("bili_login")
@@ -363,11 +354,11 @@ class Main(Star):
 
     @command("bili_sub", alias={"订阅动态"})
     async def dynamic_sub(self, event: AstrMessageEvent, uid: str, input: GreedyStr):
-        filter_types, filter_regex, live_atall, at_all, at_sub, unat_sub = (
+        filter_types, filter_regex, at_all, at_sub, unat_sub = (
             self._parse_sub_args(input)
         )
 
-        if (at_all or live_atall) and not event.is_admin():
+        if at_all and not event.is_admin():
             if event.role not in ("admin", "owner", "founder"):
                 return MessageEventResult().message(
                     "权限不足：只有管理员可以设置 @全体成员 相关选项。"
@@ -386,7 +377,7 @@ class Main(Star):
         rm_sub_users = [event.get_sender_id()] if unat_sub else None
 
         warning = ""
-        if (at_all or live_atall) and getattr(event, "get_group_id", lambda: None)():
+        if at_all and getattr(event, "get_group_id", lambda: None)():
             permit_atall = await self.dynamic_listener._check_atall_permission(
                 sub_user, True
             )
@@ -398,7 +389,6 @@ class Main(Star):
             uid_int,
             filter_types,
             filter_regex,
-            live_atall,
             at_all=at_all if at_all else None,
             add_sub_users=add_sub_users,
             rm_sub_users=rm_sub_users,
@@ -422,7 +412,6 @@ class Main(Star):
         filter_desc = self._build_filter_desc(
             filter_types,
             filter_regex,
-            live_atall,
             at_all=at_all,
             at_sub_users_len=len(add_sub_users or []),
         )
@@ -464,10 +453,6 @@ class Main(Star):
                     filters.append(f"过滤类型: {', '.join(uid_sub_data.filter_types)}")
                 if uid_sub_data.filter_regex:
                     filters.append(f"过滤正则: {uid_sub_data.filter_regex}")
-                if uid_sub_data.live_atall:
-                    filters.append("直播@全体: 开启")
-                else:
-                    filters.append("直播@全体: 关闭")
                 if uid_sub_data.at_all:
                     filters.append("@全体成员: 开启")
                 else:
@@ -568,7 +553,7 @@ class Main(Star):
             return MessageEventResult().message(
                 "请提供正确的UMO与UID。使用 /sid 指令查看当前会话的 UMO 或参考 WebUI-自定义规则。"
             )
-        filter_types, filter_regex, live_atall, at_all, at_sub, unat_sub = (
+        filter_types, filter_regex, at_all, at_sub, unat_sub = (
             self._parse_sub_args(input_str)
         )
         uid_int = int(uid)
@@ -578,7 +563,7 @@ class Main(Star):
             inherit_filters = True
 
         warning = ""
-        if at_all or live_atall:
+        if at_all:
             permit_atall = await self.dynamic_listener._check_atall_permission(
                 umo, True
             )
@@ -590,7 +575,6 @@ class Main(Star):
             uid_int,
             filter_types,
             filter_regex,
-            live_atall,
             at_all=True if at_all else None,
             add_sub_users=None,
             rm_sub_users=None,

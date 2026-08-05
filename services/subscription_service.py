@@ -35,7 +35,6 @@ class SubscriptionService:
         uid: int,
         filter_types: List[str],
         filter_regex: List[str],
-        live_atall: bool,
         at_all: bool = False,
         at_sub_users: Optional[List[str]] = None,
     ) -> SubscriptionRecord:
@@ -43,7 +42,6 @@ class SubscriptionService:
             uid=uid,
             filter_types=list(filter_types),
             filter_regex=list(filter_regex),
-            live_atall=live_atall,
             at_all=at_all,
             at_sub_users=list(set(at_sub_users)) if at_sub_users else [],
         )
@@ -68,7 +66,6 @@ class SubscriptionService:
         uid: int,
         filter_types: List[str],
         filter_regex: List[str],
-        live_atall: bool,
         at_all: Optional[bool] = None,
         add_sub_users: Optional[List[str]] = None,
         rm_sub_users: Optional[List[str]] = None,
@@ -79,7 +76,6 @@ class SubscriptionService:
             uid,
             filter_types,
             filter_regex,
-            live_atall,
             at_all=at_all,
             add_sub_users=add_sub_users,
             rm_sub_users=rm_sub_users,
@@ -97,7 +93,6 @@ class SubscriptionService:
             uid,
             filter_types,
             filter_regex,
-            live_atall,
             at_all=bool(at_all),
             at_sub_users=add_sub_users,
         )

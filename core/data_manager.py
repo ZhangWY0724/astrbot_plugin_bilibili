@@ -132,12 +132,9 @@ class DataManager:
         existing = self.get_subscription(sub_user, sub_data.uid)
         if existing:
             existing.last = sub_data.last
-            existing.is_live = sub_data.is_live
             existing.filter_types = list(sub_data.filter_types)
             existing.filter_regex = list(sub_data.filter_regex)
             existing.recent_ids = list(sub_data.recent_ids)
-            existing.live_atall = sub_data.live_atall
-            existing.last_live_start_ts = sub_data.last_live_start_ts
             existing.at_all = sub_data.at_all
             existing.at_sub_users = list(sub_data.at_sub_users)
         else:
@@ -150,7 +147,6 @@ class DataManager:
         uid: int,
         filter_types: List[str],
         filter_regex: List[str],
-        live_atall: bool,
         at_all: Optional[bool] = None,
         add_sub_users: Optional[List[str]] = None,
         rm_sub_users: Optional[List[str]] = None,
@@ -164,7 +160,6 @@ class DataManager:
             sub.update_filters(
                 filter_types,
                 filter_regex,
-                live_atall,
                 at_all=at_all,
                 add_sub_users=add_sub_users,
                 rm_sub_users=rm_sub_users,
@@ -215,15 +210,6 @@ class DataManager:
         sub = self.get_subscription(sub_user, uid)
         if sub:
             sub.record_dynamic(dyn_id, self.recent_dynamic_cache)
-            await self.save()
-
-    async def update_live_status(self, sub_user: str, uid: int, is_live: bool):
-        """
-        更新特定订阅的直播状态。
-        """
-        sub = self.get_subscription(sub_user, uid)
-        if sub:
-            sub.is_live = is_live
             await self.save()
 
     async def remove_subscription(self, sub_user: str, uid: int) -> bool:

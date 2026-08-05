@@ -8,15 +8,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from astrbot.api import logger
 from astrbot.api.message_components import At, AtAll, File, Image, Plain
 from astrbot.core.star import Context
-from astrbot.core.agent.message import (
-    AssistantMessageSegment,
-    ImageURLPart,
-    TextPart,
-    UserMessageSegment,
-)
 
 from ..bili_client import BiliClient
-from ..core.constant import BANNER_PATH, LOGO_PATH
 from ..core.data_manager import DataManager
 from ..core.models import DynamicParseResult, RenderPayload, SubscriptionRecord
 from ..core.utils import (
@@ -25,11 +18,7 @@ from ..core.utils import (
     is_height_valid,
     render_text_to_plain,
 )
-from .dispatcher import (
-    NotificationCategory,
-    SubscriptionNotification,
-    SubscriptionNotificationDispatcher,
-)
+from .dispatcher import SubscriptionNotification, SubscriptionNotificationDispatcher
 from .renderer import Renderer
 
 PLAIN_PUSH_ACTIONS = {
@@ -42,13 +31,11 @@ PLAIN_PUSH_ACTIONS = {
 VIDEO_BODY_PREFIX = "投稿了新视频"
 GROUP_MESSAGE_TYPE = "GroupMessage"
 MIN_AT_ALL_REMAINING = 1
-SECONDS_PER_MINUTE = 60
-SECONDS_PER_HOUR = 3600
 
 
 class DynamicListener:
     """
-    负责后台轮询检查B站动态和直播，并推送更新。
+    负责后台轮询检查 Bilibili 动态并推送更新。
     """
 
     def __init__(
@@ -76,9 +63,6 @@ class DynamicListener:
         self.plain_push_forward_template = (
             cfg.get("plain_push_forward_template", "") or ""
         ).strip()
-        self.enable_ai_summary = bool(cfg.get("enable_ai_summary", False))
-        self.ai_summary_prompt = (cfg.get("ai_summary_prompt", "") or "").strip()
-        self.ai_summary_cache: OrderedDict[str, str] = OrderedDict()
 
     async def start(self):
         """启动后台监听循环（按 UID 任务池调度）。"""
@@ -161,7 +145,7 @@ class DynamicListener:
     async def _run_uid_task(
         self, uid: int, targets: List[Tuple[str, SubscriptionRecord]]
     ) -> None:
-        """执行单个 UID 的任务：动态/直播仅请求一次，再按订阅分发。"""
+        """执行单个 UID 的任务：动态仅请求一次，再按订阅分发。"""
         if not targets:
             return
 
@@ -173,28 +157,12 @@ class DynamicListener:
             logger.error(f"拉取 UID={uid} 动态失败: {e}\n{traceback.format_exc()}")
             dyn = None
 
-        should_check_live = any(
-            "live" not in sub_data.filter_types for _, sub_data in targets
-        )
-        live_room = None
-        if should_check_live:
-            try:
-                live_room = await self.bili_client.get_live_info_by_uids([uid])
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:
-                logger.error(
-                    f"拉取 UID={uid} 直播状态失败: {e}\n{traceback.format_exc()}"
-                )
-                live_room = None
-
         for sub_user, sub_data in targets:
             try:
                 await self._check_single_up(
                     sub_user=sub_user,
                     sub_data=sub_data,
                     dyn=dyn,
-                    live_room=live_room,
                     shared_payload=True,
                 )
             except asyncio.CancelledError:
@@ -209,7 +177,6 @@ class DynamicListener:
         sub_user: str,
         sub_data: SubscriptionRecord,
         dyn: Optional[Dict[str, Any]] = None,
-        live_room: Optional[Dict[str, Any]] = None,
         shared_payload: bool = False,
     ):
         """检查单个订阅的UP主是否有更新。"""
@@ -236,16 +203,6 @@ class DynamicListener:
                     await self.data_manager.update_last_dynamic_id(
                         sub_user, uid, result.dyn_id
                     )
-
-        # 检查直播状态
-        if "live" in sub_data.filter_types:
-            return
-
-        if live_room is None and not shared_payload:
-            # lives = await self.bili_client.get_live_info(uid)
-            live_room = await self.bili_client.get_live_info_by_uids([uid])
-        if live_room:
-            await self._handle_live_status(sub_user, sub_data, live_room)
 
     def _build_plain_header(self, payload: Any, nested: bool) -> str:
         render_type = payload.type
@@ -275,7 +232,6 @@ class DynamicListener:
     def _compose_plain_push(
         self,
         payload: Any,
-        category: NotificationCategory = "dynamic",
         render_fail: bool = False,
         nested: bool = False,
     ) -> list:
@@ -288,18 +244,7 @@ class DynamicListener:
         title_item = f"标题: {payload.title}" if payload.title else ""
         body_raw = self._build_plain_body(payload)
 
-        is_live_plain = category == "live" and not self.rai
-        if is_live_plain:
-            # 开播/下播通知不使用默认 header，用 body 第一行作为标题行，
-            # 直播间标题放在 body 中间，时长行（如果有）放在最后
-            header_item = None
-            body_lines = body_raw.split("\n")
-            notify_line = body_lines[0]  # "📣 ...开播了/下播了！"
-            tail_lines = body_lines[1:]  # ["本场直播时长：..."]
-            ordering = [notify_line, title_item, *tail_lines]
-            lines = list(filter(None, ordering))
-        else:
-            lines = list(filter(None, [header_item, title_item, body_raw]))
+        lines = list(filter(None, [header_item, title_item, body_raw]))
         if lines:
             chain.append(Plain("\n".join(lines)))
 
@@ -385,226 +330,15 @@ class DynamicListener:
         sub_user: str,
         chain_parts: list,
         send_node: bool = False,
-        category: NotificationCategory = "dynamic",
         dyn_id: Optional[str] = None,
-        summary_payload: Optional[Any] = None,
     ):
         notification = SubscriptionNotification(
             sub_user=sub_user,
             chain_parts=chain_parts,
             send_node=self.node or send_node,
-            category=category,
             dyn_id=dyn_id,
         )
-        dispatch_result = await self.dispatcher.publish(notification)
-        if category != "dynamic" or not dispatch_result.sent or summary_payload is None:
-            return
-        await self._send_ai_summary(sub_user, summary_payload, dyn_id)
-
-    def _build_analysis_lines(self, payload: Any, nested: bool = False) -> List[str]:
-        lines = list(
-            filter(
-                None,
-                [
-                    f"作者: {getattr(payload, 'name', '') or '未知'}",
-                    f"类型: {getattr(payload, 'type', '') or '未知'}",
-                    (
-                        f"标题: {getattr(payload, 'title', '')}"
-                        if getattr(payload, "title", "")
-                        else ""
-                    ),
-                    render_text_to_plain(getattr(payload, "text", "") or ""),
-                    (
-                        f"链接: {getattr(payload, 'url', '')}"
-                        if getattr(payload, "url", "") and not nested
-                        else ""
-                    ),
-                ],
-            )
-        )
-        forward_data = getattr(payload, "forward", None)
-        if forward_data:
-            lines.append("转发原文:")
-            lines.extend(self._build_analysis_lines(forward_data, nested=True))
-        return lines
-
-    def _build_ai_summary_prompt(self, payload: Any) -> str:
-        content = "\n".join(self._build_analysis_lines(payload))
-        if self.ai_summary_prompt:
-            return self.ai_summary_prompt.replace("{content}", content)
-        return (
-            "请根据下面这条 Bilibili 动态生成简洁中文总结。\n"
-            "要求：\n"
-            "1. 先用 1 句话概括动态在说什么。\n"
-            "2. 再列 2 到 4 条要点。\n"
-            "3. 如果能明显看出作者语气或目的，用 1 句话补充。\n"
-            "4. 不要编造未提供的信息，不要使用 Markdown 标题。\n\n"
-            f"{content}"
-        )
-
-    async def _get_image_captions(
-        self, image_urls: list[str], sub_user: str
-    ) -> list[str] | None:
-        astrbot_cfg = self.context.get_config(umo=sub_user)
-        provider_settings = astrbot_cfg.get("provider_settings", {})
-        caption_provider_id = (
-            provider_settings.get("default_image_caption_provider_id", "")
-        ).strip()
-        if not caption_provider_id or not image_urls:
-            return None
-
-        caption_prompt = provider_settings.get(
-            "image_caption_prompt", "Please describe the image using Chinese."
-        )
-        provider_mgr = self.context.provider_manager
-
-        caption_provider = await provider_mgr.get_provider_by_id(caption_provider_id)
-        if not caption_provider:
-            logger.warning(f"图片转述模型 {caption_provider_id} 未找到，跳过转述。")
-            return None
-
-        captions = []
-        for img_url in image_urls:
-            try:
-                resp = await caption_provider.text_chat(
-                    prompt=caption_prompt,
-                    image_urls=[img_url],
-                )
-                cap = (getattr(resp, "completion_text", "") or "").strip()
-                if cap:
-                    captions.append(cap)
-                    logger.info(f"图片转述成功: {img_url[:60]} -> {cap[:80]}")
-            except Exception as e:
-                logger.warning(f"图片转述失败 {img_url[:60]}: {e}")
-                captions.append("")
-        return captions
-
-    async def _generate_ai_summary(
-        self, sub_user: str, payload: Any, dyn_id: Optional[str] = None
-    ) -> str:
-        if not self.enable_ai_summary:
-            return ""
-
-        # 检查缓存
-        if dyn_id and dyn_id in self.ai_summary_cache:
-            logger.debug(f"AI总结命中缓存: dyn_id={dyn_id}")
-            return self.ai_summary_cache[dyn_id]
-
-        try:
-            provider_id = await self.context.get_current_chat_provider_id(umo=sub_user)
-            if not provider_id:
-                logger.info(f"会话 {sub_user} 未配置聊天模型，已跳过动态摘要。")
-                return ""
-
-            image_urls = [
-                url.strip().replace("http://", "https://")
-                for url in getattr(payload, "image_urls", []) or []
-                if isinstance(url, str) and url.strip() and not url.startswith("data:")
-            ][:8]
-
-            prompt_text = self._build_ai_summary_prompt(payload)
-
-            captions = await self._get_image_captions(image_urls, sub_user)
-
-            if captions:
-                caption_lines = "\n".join(
-                    f"[图片 {i + 1}]: {c}" for i, c in enumerate(captions) if c
-                )
-                if caption_lines:
-                    prompt_text = (
-                        f"{prompt_text}\n\n该动态包含以下图片：\n{caption_lines}"
-                    )
-                logger.info(
-                    f"AI摘要: 使用图片转述, prompt_len={len(prompt_text)}, images={len(image_urls)}, captions={len(captions)}"
-                )
-                llm_resp = await self.context.llm_generate(
-                    chat_provider_id=provider_id,
-                    contexts=[UserMessageSegment(content=[TextPart(text=prompt_text)])],
-                )
-            else:
-                user_parts: list = [TextPart(text=prompt_text)]
-                for idx, img_url in enumerate(image_urls, start=1):
-                    user_parts.append(
-                        ImageURLPart(
-                            image_url=ImageURLPart.ImageURL(
-                                url=img_url, id=f"dynamic-{idx}"
-                            )
-                        )
-                    )
-                logger.info(
-                    f"AI摘要: 构造显式多模态消息, prompt_len={len(prompt_text)}, images={len(image_urls)}, urls={image_urls}"
-                )
-                llm_resp = await self.context.llm_generate(
-                    chat_provider_id=provider_id,
-                    contexts=[UserMessageSegment(content=user_parts)],
-                )
-
-            summary_text = (getattr(llm_resp, "completion_text", "") or "").strip()
-
-            # 缓存 AI 总结结果
-            if dyn_id and summary_text:
-                self.ai_summary_cache[dyn_id] = summary_text
-                # 限制缓存大小，使用与 render_cache 相同的大小限制
-                while len(self.ai_summary_cache) > self.render_cache_limit:
-                    self.ai_summary_cache.popitem(last=False)
-
-            return summary_text
-        except Exception as e:
-            logger.error(f"生成动态 AI 摘要失败: {e}\n{traceback.format_exc()}")
-            return ""
-
-    async def _persist_ai_summary(
-        self, sub_user: str, payload: Any, summary_text: str
-    ) -> None:
-        conv_mgr = self.context.conversation_manager
-
-        try:
-            cid = await conv_mgr.get_curr_conversation_id(sub_user)
-            if not cid:
-                return
-
-            user_parts: list = [TextPart(text=self._build_ai_summary_prompt(payload))]
-            for index, image_url in enumerate(
-                [
-                    url.strip().replace("http://", "https://")
-                    for url in getattr(payload, "image_urls", []) or []
-                    if isinstance(url, str)
-                    and url.strip()
-                    and not url.startswith("data:")
-                ][:8],
-                start=1,
-            ):
-                user_parts.append(
-                    ImageURLPart(
-                        image_url=ImageURLPart.ImageURL(
-                            url=image_url, id=f"dynamic-{index}"
-                        )
-                    )
-                )
-
-            await conv_mgr.add_message_pair(
-                cid=cid,
-                user_message=UserMessageSegment(content=user_parts),
-                assistant_message=AssistantMessageSegment(content=summary_text),
-            )
-        except Exception as e:
-            logger.error(f"写入动态摘要到会话历史失败: {e}\n{traceback.format_exc()}")
-
-    async def _send_ai_summary(
-        self, sub_user: str, payload: Any, dyn_id: Optional[str] = None
-    ) -> None:
-        summary_text = await self._generate_ai_summary(sub_user, payload, dyn_id)
-        if not summary_text:
-            return
-        await self._persist_ai_summary(sub_user, payload, summary_text)
-        summary_notification = SubscriptionNotification(
-            sub_user=sub_user,
-            chain_parts=[Plain(f"AI 总结:\n{summary_text}")],
-            send_node=False,
-            category="dynamic",
-            dyn_id=dyn_id,
-        )
-        await self.dispatcher.publish(summary_notification)
+        await self.dispatcher.publish(notification)
 
     def _cache_render(self, dyn_id: Optional[str], chain_parts: list, send_node: bool):
         """缓存渲染结果，避免同一动态在不同会话重复渲染。"""
@@ -640,9 +374,7 @@ class DynamicListener:
                     sub_user,
                     chain_to_send,
                     send_node=cached["send_node"],
-                    category="dynamic",
                     dyn_id=dyn_id,
-                    summary_payload=payload,
                 )
             except Exception as e:
                 logger.error(
@@ -666,9 +398,7 @@ class DynamicListener:
                     sub_user,
                     chain_to_send,
                     send_node=send_node_flag,
-                    category="dynamic",
                     dyn_id=dyn_id,
-                    summary_payload=payload,
                 )
                 logger.info(
                     f"动态推送完成(纯文本): sub_user={sub_user} dyn_id={dyn_id}"
@@ -702,9 +432,7 @@ class DynamicListener:
                     sub_user,
                     chain_to_send,
                     send_node=send_node_flag,
-                    category="dynamic",
                     dyn_id=dyn_id,
-                    summary_payload=payload,
                 )
                 logger.info(f"动态推送完成(图片): sub_user={sub_user} dyn_id={dyn_id}")
             except Exception as e:
@@ -729,9 +457,7 @@ class DynamicListener:
                 sub_user,
                 chain_to_send,
                 send_node=send_node_flag,
-                category="dynamic",
                 dyn_id=dyn_id,
-                summary_payload=payload,
             )
             logger.info(
                 f"动态推送完成(降级纯文本): sub_user={sub_user} dyn_id={dyn_id}"
@@ -781,121 +507,18 @@ class DynamicListener:
     def _add_at_components(
         chain_parts: List[Any],
         sub_data: Optional[SubscriptionRecord],
-        is_live: bool = False,
         permit_atall: bool = True,
     ) -> List[Any]:
         if not sub_data:
             return chain_parts
         at_components = []
-        should_at_all = (
-            sub_data.at_all or (is_live and sub_data.live_atall)
-        ) and permit_atall
+        should_at_all = sub_data.at_all and permit_atall
         if should_at_all:
             at_components.extend([AtAll(), Plain(" ")])
         elif sub_data.at_sub_users:
             for uid in sub_data.at_sub_users:
                 at_components.extend([At(qq=uid), Plain(" ")])
         return at_components + chain_parts
-
-    @staticmethod
-    def _parse_live_start_timestamp(live_room: Dict[str, Any]) -> int:
-        try:
-            live_start_ts = int(live_room.get("live_time", 0) or 0)
-        except (TypeError, ValueError):
-            return 0
-        if live_start_ts <= 0:
-            return 0
-        return live_start_ts
-
-    @staticmethod
-    def _calc_live_duration_seconds(current_ts: int, live_start_ts: int) -> int:
-        if current_ts <= 0 or live_start_ts <= 0:
-            return 0
-        if current_ts <= live_start_ts:
-            return 0
-        return current_ts - live_start_ts
-
-    @staticmethod
-    def _format_live_duration_text(duration_seconds: int) -> str:
-        if duration_seconds <= 0:
-            return ""
-
-        hours = duration_seconds // SECONDS_PER_HOUR
-        minutes = (duration_seconds % SECONDS_PER_HOUR) // SECONDS_PER_MINUTE
-        seconds = duration_seconds % SECONDS_PER_MINUTE
-        if hours > 0:
-            return f"{hours}小时{minutes}分钟{seconds}秒"
-        if minutes > 0:
-            return f"{minutes}分钟{seconds}秒"
-        return f"{seconds}秒"
-
-    @staticmethod
-    def _evaluate_live_transition(
-        sub_data: SubscriptionRecord, live_room: Dict[str, Any]
-    ) -> Tuple[bool, bool, bool]:
-        is_live_now = live_room.get("live_status", "") == 1
-        is_live_started = is_live_now and not sub_data.is_live
-        is_live_ended = (not is_live_now) and sub_data.is_live
-        return is_live_now, is_live_started, is_live_ended
-
-    @staticmethod
-    def _build_live_payload(live_room: Dict[str, Any], text: str) -> RenderPayload:
-        room_id = int(live_room.get("room_id", 0) or 0)
-        link = f"https://live.bilibili.com/{room_id}"
-        return RenderPayload(
-            banner=image_to_base64(BANNER_PATH),
-            name="AstrBot",
-            avatar=image_to_base64(LOGO_PATH),
-            title=str(live_room.get("title", "Unknown") or "Unknown"),
-            url=link,
-            qrcode=create_qrcode(link),
-            image_urls=[str(live_room.get("cover_from_user", "") or "")],
-            text=text,
-        )
-
-    async def _send_live_payload(
-        self,
-        sub_user: str,
-        payload: RenderPayload,
-        sub_data: SubscriptionRecord,
-        permit_atall: bool,
-        is_offline: bool = False,
-    ) -> None:
-        if not self.rai:
-            ls = self._compose_plain_push(payload, category="live")
-            if not is_offline:
-                ls = self._add_at_components(
-                    list(ls), sub_data, is_live=True, permit_atall=permit_atall
-                )
-            await self._send_dynamic(sub_user, ls, category="live")
-            return
-        img_path = await self.renderer.render_dynamic(payload)
-        if img_path:
-            platform_name = self._resolve_platform_name(sub_user)
-            if is_height_valid(img_path, platform_name):
-                image_chain = [
-                    Image.fromFileSystem(img_path),
-                    Plain(f"\n{payload.url}"),
-                ]
-            else:
-                timestamp = int(time.time())
-                filename = f"bilibili_live_{timestamp}.jpg"
-                image_chain = [
-                    File(file=img_path, name=filename),
-                    Plain(f"\n{payload.url}"),
-                ]
-            if not is_offline:
-                image_chain = self._add_at_components(
-                    image_chain, sub_data, is_live=True, permit_atall=permit_atall
-                )
-            await self._send_dynamic(sub_user, image_chain, category="live")
-            return
-        ls = self._compose_plain_push(payload, render_fail=True, category="live")
-        if not is_offline:
-            ls = self._add_at_components(
-                list(ls), sub_data, is_live=True, permit_atall=permit_atall
-            )
-        await self._send_dynamic(sub_user, ls, category="live")
 
     async def _check_atall_permission(self, sub_user: str, enabled: bool) -> bool:
         if not enabled:
@@ -909,7 +532,7 @@ class DynamicListener:
         platform_id, group_id = group_ctx
         platform_inst = self.context.get_platform_inst(platform_id)
         if not platform_inst:
-            logger.warning(f"live_atall 失败：找不到平台实例 {platform_id}")
+            logger.warning(f"at_all 失败：找不到平台实例 {platform_id}")
             return False
 
         client = platform_inst.get_client()
@@ -966,51 +589,6 @@ class DynamicListener:
             )
             return False
         return True
-
-    async def _handle_live_status(
-        self, sub_user: str, sub_data: SubscriptionRecord, live_room: Dict[str, Any]
-    ):
-        """处理并发送直播状态变更通知。"""
-        current_unix_ts = int(time.time())
-        is_live_now, is_live_started, is_live_ended = self._evaluate_live_transition(
-            sub_data, live_room
-        )
-        current_live_start_ts = self._parse_live_start_timestamp(live_room)
-        if is_live_now and current_live_start_ts > 0:
-            sub_data.last_live_start_ts = current_live_start_ts
-
-        user_name = str(live_room.get("uname", "Unknown") or "Unknown")
-        text = ""
-        if is_live_started:
-            if current_live_start_ts > 0:
-                sub_data.last_live_start_ts = current_live_start_ts
-            text = f"📣 你订阅的UP 「{user_name}」 开播了！"
-            await self.data_manager.update_live_status(sub_user, sub_data.uid, True)
-        if is_live_ended:
-            cached_live_start_ts = int(sub_data.last_live_start_ts or 0)
-            live_start_ts = max(current_live_start_ts, cached_live_start_ts)
-            live_duration_seconds = self._calc_live_duration_seconds(
-                current_unix_ts, live_start_ts
-            )
-            duration_text = self._format_live_duration_text(live_duration_seconds)
-            if duration_text:
-                text = (
-                    f"📣 你订阅的UP 「{user_name}」 下播了！<br>"
-                    f"本场直播时长：{duration_text}"
-                )
-            else:
-                text = f"📣 你订阅的UP 「{user_name}」 下播了！"
-            sub_data.last_live_start_ts = 0
-            await self.data_manager.update_live_status(sub_user, sub_data.uid, False)
-        if text:
-            payload = self._build_live_payload(live_room, text)
-            with_atall = await self._check_atall_permission(
-                sub_user,
-                bool(sub_data.live_atall or sub_data.at_all) and is_live_started,
-            )
-            await self._send_live_payload(
-                sub_user, payload, sub_data, with_atall, is_offline=is_live_ended
-            )
 
     def _get_dynamic_items(self, dyn: Dict[str, Any], data: SubscriptionRecord):
         """获取动态条目列表。"""

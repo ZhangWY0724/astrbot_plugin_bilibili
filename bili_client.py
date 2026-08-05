@@ -2,7 +2,6 @@ from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from astrbot.api import logger
 from bilibili_api import Credential, request_settings, user
-from bilibili_api.utils.network import Api
 
 
 class BiliClient:
@@ -129,35 +128,6 @@ class BiliClient:
         except Exception as e:
             logger.error(f"获取用户动态失败 (UID: {uid}): {e}")
             return None
-
-    async def get_live_info(self, uid: int) -> Optional[Dict[str, Any]]:
-        """
-        获取用户的直播间信息。
-        DEPRECATED: 该方法已弃用，据反馈易引起412错误
-        """
-        try:
-            u: user.User = self.get_user(uid)
-            # 上游接口同u.get_user_info，即"https://api.bilibili.com/x/space/wbi/acc/info"，412的诱因
-            return await u.get_live_info()
-        except Exception as e:
-            logger.error(f"获取直播间信息失败 (UID: {uid}): {e}")
-            return None
-
-    async def get_live_info_by_uids(self, uids: list[int]) -> Optional[Dict[str, Any]]:
-        self._apply_proxy()
-        API_CONFIG = {
-            "url": "https://api.live.bilibili.com/room/v1/Room/get_status_info_by_uids",
-            "method": "GET",
-            "verify": False,
-            "params": {"uids[]": "list<int>: 主播uid列表"},
-            "comment": "通过主播uid列表获取直播间状态信息（是否在直播、房间号等）",
-        }
-        params: Dict[str, list[int]] = {"uids[]": uids}
-        resp = await Api(**API_CONFIG, no_csrf=True).update_params(**params).result
-        if not isinstance(resp, dict) or not resp:
-            return None
-        live_room = next(iter(resp.values()))
-        return live_room
 
     async def get_user_info(self, uid: int) -> Tuple[Dict[str, Any] | None, str]:
         """

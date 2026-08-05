@@ -1,6 +1,8 @@
 ## 未发布
 - 将插件功能收敛为 Bilibili 订阅提醒，保留扫码登录、凭据持久化、订阅管理和定时检测。
 - 移除番剧推荐、QQ 小程序解析、BV 自动解析以及 Bilibili/Bangumi LLM Function Tools。
+- 移除直播状态检测、开播/下播提醒及相关订阅字段。
+- 移除动态 AI 总结、图片转述、会话历史写入及相关配置。
 
 ## v1.6.3 & v1.6.4
 - 修复文字模式下up主信息指代不清，pr by[dizzykitty3](https://github.com/dizzykitty3)

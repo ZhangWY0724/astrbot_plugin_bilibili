@@ -1,5 +1,5 @@
 name: astrbot_plugin_bilibili # 这是你的插件的唯一识别名。
-desc: 哔哩哔哩 UP 主视频、图文动态与直播状态订阅提醒插件
+desc: 哔哩哔哩 UP 主视频、图文、文字、专栏与转发动态订阅提醒插件
 help: 输入 /bili 查看关键词回复帮助。
 version: v1.6.4 # 插件的版本号
 author: "Flartiny & Soulter" # 作者
