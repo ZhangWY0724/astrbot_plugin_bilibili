@@ -108,6 +108,37 @@ class BrowserRuntimeTests(unittest.TestCase):
         self.assertEqual(command[-2:], ("install", "chromium"))
 
 
+class _FakeBrowserContext:
+    pass
+
+
+class _FakeBrowser:
+    def __init__(self):
+        self.context_options = None
+
+    def is_connected(self):
+        return True
+
+    async def new_context(self, **options):
+        self.context_options = options
+        return _FakeBrowserContext()
+
+
+class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_full_hd_viewport_without_pixel_upscaling(self):
+        renderer = MODULE.NativeOpusRenderer(lambda: {}, install_mode="manual")
+        browser = _FakeBrowser()
+        renderer._browser = browser
+
+        await renderer._ensure_context()
+
+        self.assertEqual(
+            browser.context_options["viewport"],
+            {"width": 1920, "height": 1080},
+        )
+        self.assertEqual(browser.context_options["device_scale_factor"], 1)
+
+
 class _FakeContainer:
     async def wait_for(self, **_kwargs):
         return None

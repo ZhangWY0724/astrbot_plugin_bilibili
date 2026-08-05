@@ -3,6 +3,7 @@
 - 新增 `render_mode` 三态渲染：纯文本、插件卡片和 Bilibili 原生动态截图。原生模式使用 Playwright 无头 Chromium、复用登录 Cookie 与代理，并在失败时降级。
 - 按 AstrBot 插件规范声明 Playwright Python 依赖；首次原生渲染可按配置自动准备 Chromium 运行时。
 - Linux/Docker 原生截图模式会自动安装 Chromium 系统运行库，并能在浏览器已下载但共享库缺失时自动修复。
+- 原生动态截图改用 `1920×1080` 桌面视口和 `1` 倍设备像素比，避免非标准宽高比及二倍像素放大。
 - 将插件功能收敛为 Bilibili 订阅提醒，保留扫码登录、凭据持久化、订阅管理和定时检测。
 - 移除番剧推荐、QQ 小程序解析、BV 自动解析以及 Bilibili/Bangumi LLM Function Tools。
 - 移除直播状态检测、开播/下播提醒及相关订阅字段。

@@ -45,6 +45,8 @@ plugin i https://github.com/ZhangWY0724/astrbot_plugin_bilibili
 
 原生渲染使用配置项 `proxy`，与 Bilibili API 请求共用代理；扫码登录和持久化凭据会转换为浏览器 Cookie 使用，不会新增登录体系。
 
+原生页面默认使用 `1920×1080` 桌面视口和 `1` 倍设备像素比，再对 `.bili-opus-view` 动态主体执行元素截图；输出尺寸由动态主体实际高度决定，不会填充为固定的整屏画布。
+
 
 ## 📖 使用说明
 

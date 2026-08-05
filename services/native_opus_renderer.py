@@ -11,6 +11,9 @@ from astrbot.api import logger
 
 OPUS_URL_TEMPLATE = "https://www.bilibili.com/opus/{dyn_id}"
 OPUS_SELECTOR = ".bili-opus-view"
+NATIVE_VIEWPORT_WIDTH = 1920
+NATIVE_VIEWPORT_HEIGHT = 1080
+NATIVE_DEVICE_SCALE_FACTOR = 1
 VALID_INSTALL_MODES = {"auto", "manual", "disable"}
 
 
@@ -141,8 +144,11 @@ class NativeOpusRenderer:
             await self._context.close()
 
         self._context = await self._browser.new_context(
-            viewport={"width": 1280, "height": 900},
-            device_scale_factor=2,
+            viewport={
+                "width": NATIVE_VIEWPORT_WIDTH,
+                "height": NATIVE_VIEWPORT_HEIGHT,
+            },
+            device_scale_factor=NATIVE_DEVICE_SCALE_FACTOR,
             locale="zh-CN",
             timezone_id="Asia/Shanghai",
             color_scheme="light",
