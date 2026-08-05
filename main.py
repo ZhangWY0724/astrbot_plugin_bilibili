@@ -82,7 +82,7 @@ class Main(Star):
             credential_provider=lambda: self.bili_client.get_credential_dict(),
             proxy=self.proxy,
             install_mode=self.cfg.get("native_browser_install", "auto"),
-            timeout_secs=self.cfg.get("native_browser_timeout_secs", 30),
+            timeout_secs=self.cfg.get("native_browser_timeout_secs", 60),
         )
         self.native_browser_task = None
         if self.render_mode == "native":

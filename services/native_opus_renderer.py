@@ -6,13 +6,17 @@ import sys
 import tempfile
 from collections.abc import Callable
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from astrbot.api import logger
 
 OPUS_URL_TEMPLATE = "https://www.bilibili.com/opus/{dyn_id}"
 OPUS_SELECTOR = ".bili-opus-view"
-OBSTRUCTIVE_POPOVER_SELECTOR = ".v-popover-content"
-FORCED_TEST_DYN_ID = "1232710769951375376"
+OBSTRUCTIVE_PAGE_SELECTORS = (
+    ".v-popover-content",
+    ".bili-header__bar.mini-header",
+)
+VIDEO_DYNAMIC_TYPE = "DYNAMIC_TYPE_AV"
 NATIVE_VIEWPORT_WIDTH = 1920
 NATIVE_VIEWPORT_HEIGHT = 1080
 NATIVE_DEVICE_SCALE_FACTOR = 1
@@ -58,6 +62,32 @@ def build_bilibili_cookies(credential: Optional[Dict[str, Any]]) -> list[dict]:
     return cookies
 
 
+def supports_native_render(dynamic_type: Any) -> bool:
+    """视频投稿继续使用现有卡片，其他动态允许原生页面截图。"""
+    return str(dynamic_type or "") != VIDEO_DYNAMIC_TYPE
+
+
+def resolve_bilibili_page_url(target_url: Any, dyn_id: str) -> str:
+    """只接受 Bilibili HTTPS 页面地址，无效时回退到动态 opus 地址。"""
+    fallback = OPUS_URL_TEMPLATE.format(dyn_id=dyn_id)
+    candidate = str(target_url or "").strip()
+    if candidate.startswith("//"):
+        candidate = f"https:{candidate}"
+    try:
+        parsed = urlparse(candidate)
+        hostname = (parsed.hostname or "").lower()
+    except ValueError:
+        return fallback
+    if (
+        parsed.scheme == "https"
+        and not parsed.username
+        and not parsed.password
+        and (hostname == "bilibili.com" or hostname.endswith(".bilibili.com"))
+    ):
+        return candidate
+    return fallback
+
+
 class NativeOpusRenderer:
     """使用 Playwright 截取 Bilibili 原生动态容器。"""
 
@@ -66,7 +96,7 @@ class NativeOpusRenderer:
         credential_provider: Callable[[], Optional[Dict[str, Any]]],
         proxy: str = "",
         install_mode: str = "auto",
-        timeout_secs: float = 30,
+        timeout_secs: float = 60,
     ) -> None:
         self.credential_provider = credential_provider
         self.proxy = (proxy or "").strip()
@@ -76,7 +106,7 @@ class NativeOpusRenderer:
             if normalized_install_mode in VALID_INSTALL_MODES
             else "auto"
         )
-        self.timeout_ms = max(int(float(timeout_secs) * 1000), 5000)
+        self.timeout_ms = max(int(float(timeout_secs) * 1000), 60000)
 
         self._lock = asyncio.Lock()
         self._playwright = None
@@ -87,21 +117,24 @@ class NativeOpusRenderer:
         self._install_attempted = False
         self._disabled_reason = ""
 
-    async def render_dynamic(self, dyn_id: str) -> Optional[str]:
-        """访问固定 opus 地址并截取动态主体，失败时返回 None。"""
+    async def render_dynamic(
+        self, dyn_id: str, target_url: Optional[str] = None
+    ) -> Optional[str]:
+        """访问动态实际页面并截取主体，失败时返回 None。"""
         normalized_id = str(dyn_id or "").strip()
         if not normalized_id.isdigit():
             logger.warning(f"原生动态渲染跳过无效动态 ID: {normalized_id!r}")
             return None
         if self.install_mode == "disable":
             return None
+        page_url = resolve_bilibili_page_url(target_url, normalized_id)
 
         async with self._lock:
             try:
                 context = await self._ensure_context()
                 if context is None:
                     return None
-                return await self._capture(context, normalized_id)
+                return await self._capture(context, normalized_id, page_url)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -290,28 +323,32 @@ class NativeOpusRenderer:
         logger.info("Playwright Chromium 运行环境安装完成。")
         return True
 
-    async def _capture(self, context, dyn_id: str) -> Optional[str]:
+    async def _capture(self, context, dyn_id: str, page_url: str) -> Optional[str]:
         page = await context.new_page()
         output_path = ""
         try:
-            url = OPUS_URL_TEMPLATE.format(dyn_id=FORCED_TEST_DYN_ID)
             await page.goto(
-                url, wait_until="domcontentloaded", timeout=self.timeout_ms
+                page_url, wait_until="domcontentloaded", timeout=self.timeout_ms
             )
             container = page.locator(OPUS_SELECTOR).first
             await container.wait_for(state="visible", timeout=self.timeout_ms)
             await page.evaluate(
-                """selector => {
-                    document.querySelectorAll(selector).forEach(
-                        element => element.remove()
-                    );
+                """selectors => {
+                    selectors.forEach(selector => {
+                        document.querySelectorAll(selector).forEach(
+                            element => element.remove()
+                        );
+                    });
                     const style = document.createElement('style');
-                    style.textContent = `${selector} { display: none !important; }`;
+                    style.textContent = selectors.map(
+                        selector => `${selector} { display: none !important; }`
+                    ).join(' ');
                     document.head.appendChild(style);
                 }""",
-                OBSTRUCTIVE_POPOVER_SELECTOR,
+                list(OBSTRUCTIVE_PAGE_SELECTORS),
             )
             await page.evaluate("() => document.fonts.ready")
+            await self._trigger_lazy_loading(page)
             try:
                 await page.wait_for_function(
                     """selector => {
@@ -322,7 +359,7 @@ class NativeOpusRenderer:
                         );
                     }""",
                     arg=OPUS_SELECTOR,
-                    timeout=min(self.timeout_ms, 15000),
+                    timeout=self.timeout_ms,
                 )
             except Exception:
                 logger.warning(f"原生动态部分图片等待超时: dyn_id={dyn_id}")
@@ -357,6 +394,27 @@ class NativeOpusRenderer:
                     os.remove(output_path)
                 except OSError:
                     pass
+
+    @staticmethod
+    async def _trigger_lazy_loading(page) -> None:
+        """逐屏滚动动态主体，触发视口外图片的懒加载。"""
+        await page.evaluate(
+            """async selector => {
+                const root = document.querySelector(selector);
+                if (!root) return;
+                const rect = root.getBoundingClientRect();
+                const start = Math.max(0, rect.top + window.scrollY);
+                const end = start + Math.max(rect.height, root.scrollHeight);
+                const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
+                for (let y = start; y < end; y += step) {
+                    window.scrollTo(0, y);
+                    await new Promise(resolve => setTimeout(resolve, 250));
+                }
+                window.scrollTo(0, start);
+                await new Promise(resolve => setTimeout(resolve, 500));
+            }""",
+            OPUS_SELECTOR,
+        )
 
     @staticmethod
     async def _wait_for_stable_layout(container) -> None:

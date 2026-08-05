@@ -53,8 +53,8 @@
     "native_browser_timeout_secs": {
         "description": "原生页面截图超时",
         "type": "int",
-        "hint": "打开 Bilibili 动态页面、等待容器和截图的超时时间（秒）。",
-        "default": 30
+        "hint": "打开 Bilibili 页面、逐屏加载图片、等待容器和截图的超时时间（秒），运行时最低为 60 秒。",
+        "default": 60
     },
     "renderer_template": {
         "description": "renderer_template",

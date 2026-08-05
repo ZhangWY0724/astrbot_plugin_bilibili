@@ -164,7 +164,12 @@ class Renderer:
         if not payload.image_urls and self.rai:
             payload.image_urls = [image_to_base64(LOGO_PATH)]
         if not is_forward:
-            payload.url = f"https:{jump_url}"
+            if jump_url.startswith("//"):
+                payload.url = f"https:{jump_url}"
+            elif jump_url.startswith("https://"):
+                payload.url = jump_url
+            else:
+                payload.url = f"https://www.bilibili.com/{jump_url.lstrip('/')}"
             payload.qrcode = create_qrcode(payload.url)
         return payload
 

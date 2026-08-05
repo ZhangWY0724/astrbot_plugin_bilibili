@@ -19,7 +19,12 @@ from ..core.utils import (
     render_text_to_plain,
 )
 from .dispatcher import SubscriptionNotification, SubscriptionNotificationDispatcher
-from .native_opus_renderer import NativeOpusRenderer, resolve_render_mode
+from .native_opus_renderer import (
+    NativeOpusRenderer,
+    resolve_bilibili_page_url,
+    resolve_render_mode,
+    supports_native_render,
+)
 from .renderer import Renderer
 
 PLAIN_PUSH_ACTIONS = {
@@ -446,16 +451,24 @@ class DynamicListener:
             return self._build_plain_chain(payload), "纯文本", None
 
         if self.render_mode == "native":
-            if self.native_renderer is not None and dyn_id:
-                native_path = await self.native_renderer.render_dynamic(dyn_id)
+            if (
+                supports_native_render(payload.type)
+                and self.native_renderer is not None
+                and dyn_id
+            ):
+                page_url = resolve_bilibili_page_url(payload.url, dyn_id)
+                native_path = await self.native_renderer.render_dynamic(
+                    dyn_id, target_url=page_url
+                )
                 if native_path:
-                    opus_url = f"https://www.bilibili.com/opus/{dyn_id}"
                     return (
-                        self._build_image_chain(sub_user, native_path, opus_url),
+                        self._build_image_chain(sub_user, native_path, page_url),
                         "原生截图",
                         native_path,
                     )
-            logger.warning(f"原生动态渲染失败，降级卡片: dyn_id={dyn_id}")
+                logger.warning(f"原生动态渲染失败，降级卡片: dyn_id={dyn_id}")
+            elif not supports_native_render(payload.type):
+                logger.debug(f"视频动态使用卡片图片: dyn_id={dyn_id}")
 
         img_path = await self.renderer.render_dynamic(payload)
         if img_path:

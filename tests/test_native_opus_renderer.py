@@ -74,6 +74,32 @@ class CookieMappingTests(unittest.TestCase):
 
 
 class BrowserRuntimeTests(unittest.TestCase):
+    def test_browser_timeout_has_sixty_second_floor(self):
+        renderer = MODULE.NativeOpusRenderer(lambda: {}, timeout_secs=30)
+        self.assertEqual(renderer.timeout_ms, 60000)
+
+    def test_video_dynamic_uses_card_renderer(self):
+        self.assertFalse(MODULE.supports_native_render("DYNAMIC_TYPE_AV"))
+        self.assertTrue(MODULE.supports_native_render("DYNAMIC_TYPE_DRAW"))
+
+    def test_resolves_actual_bilibili_page_url(self):
+        self.assertEqual(
+            MODULE.resolve_bilibili_page_url(
+                "https://www.bilibili.com/read/cv123", "456"
+            ),
+            "https://www.bilibili.com/read/cv123",
+        )
+        self.assertEqual(
+            MODULE.resolve_bilibili_page_url("//www.bilibili.com/opus/789", "456"),
+            "https://www.bilibili.com/opus/789",
+        )
+
+    def test_rejects_external_page_url(self):
+        self.assertEqual(
+            MODULE.resolve_bilibili_page_url("https://example.com/unsafe", "456"),
+            "https://www.bilibili.com/opus/456",
+        )
+
     def test_detects_missing_executable(self):
         self.assertTrue(
             MODULE.NativeOpusRenderer._is_browser_missing_error(
@@ -190,19 +216,23 @@ class _FakeContext:
 
 
 class CaptureTests(unittest.IsolatedAsyncioTestCase):
-    async def test_capture_uses_forced_test_opus_and_removes_login_popover(self):
+    async def test_capture_uses_actual_url_and_hides_page_overlays(self):
         renderer = MODULE.NativeOpusRenderer(lambda: {}, install_mode="manual")
         context = _FakeContext()
-        output_path = await renderer._capture(context, "123456")
+        page_url = "https://www.bilibili.com/opus/123456"
+        output_path = await renderer._capture(context, "123456", page_url)
 
-        self.assertEqual(
-            context.page.goto_url,
-            "https://www.bilibili.com/opus/1232710769951375376",
+        self.assertEqual(context.page.goto_url, page_url)
+        self.assertTrue(
+            any(
+                arg == list(MODULE.OBSTRUCTIVE_PAGE_SELECTORS)
+                and "element.remove()" in expression
+                for expression, arg in context.page.evaluate_calls
+            )
         )
         self.assertTrue(
             any(
-                arg == MODULE.OBSTRUCTIVE_POPOVER_SELECTOR
-                and "element.remove()" in expression
+                arg == MODULE.OPUS_SELECTOR and "window.scrollTo" in expression
                 for expression, arg in context.page.evaluate_calls
             )
         )
