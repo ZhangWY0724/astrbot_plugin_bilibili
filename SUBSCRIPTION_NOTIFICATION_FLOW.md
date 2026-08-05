@@ -35,6 +35,7 @@
 | `services/subscription_service.py` | 新增或更新订阅，首次订阅时初始化动态游标 |
 | `services/listener.py` | UID 调度、动态分类、过滤、提醒组装和发送协调 |
 | `services/renderer.py` | 将动态数据转换为 `RenderPayload` 并渲染 HTML 卡片 |
+| `services/native_opus_renderer.py` | 复用 Bilibili 凭据和代理，使用 Playwright 截取原生动态页面 |
 | `services/dispatcher.py` | 重连静默判断、UMO 消息发送和发送结果封装 |
 | `core/models.py` | 订阅记录、动态解析结果及渲染数据结构 |
 | `core/data_manager.py` | 凭据、订阅游标和订阅配置持久化 |
@@ -97,7 +98,7 @@
 
 旧数据中的 `is_live`、`live_atall` 和 `last_live_start_ts` 会在读取时被忽略，`filter_types` 中遗留的 `live` 也会被清除；这些变化会在该数据下一次保存时自然写回，不需要批量迁移。旧命令中的 `live` 和 `live_atall` 参数会被兼容性忽略，不会误存为正文正则。
 
-所有记录通过 `StarTools.get_data_dir(plugin_name="astrbot_plugin_bilibili")` 下的 JSON 文件保存。保存操作使用 `asyncio.to_thread()`，避免同步文件写入直接阻塞事件循环。
+所有记录通过 `StarTools.get_data_dir(plugin_name="astrbot_plugin_bilibili_aikaid")` 下的 JSON 文件保存。首次启动会从旧标识 `astrbot_plugin_bilibili` 的标准数据目录或历史相对路径复制数据，保留登录凭据、订阅和动态游标。保存操作使用 `asyncio.to_thread()`，避免同步文件写入直接阻塞事件循环。
 
 ## 5. 新增和更新订阅
 
@@ -242,9 +243,20 @@ UID -> [(UMO, SubscriptionRecord), ...]
 
 ## 10. 消息组装方式
 
-### 10.1 图片卡片模式
+### 10.1 渲染模式选择
 
-`rai=true` 时：
+`render_mode` 支持 `auto`、`plain`、`card` 和 `native`：
+
+- `auto` 根据旧版 `rai` 布尔配置兼容为 `plain` 或 `card`。
+- `plain` 直接组装文本消息。
+- `card` 使用 AstrBot `html_render()` 生成插件自定义图片卡片。
+- `native` 使用独立的 Playwright Chromium 打开 `https://www.bilibili.com/opus/{dyn_id}`，等待 `.bili-opus-view` 可见并对该元素截图。
+
+原生模式失败降级为卡片，卡片失败再降级为纯文本。原生渲染器懒启动并复用 Chromium；每条动态使用独立页面，插件终止时关闭浏览器。
+
+### 10.2 图片卡片模式
+
+`render_mode=card` 时：
 
 1. `Renderer` 将 `RenderPayload` 送入当前 HTML 模板。
 2. 最多尝试渲染 3 次，每次失败后等待 2 秒。
@@ -254,9 +266,17 @@ UID -> [(UMO, SubscriptionRecord), ...]
 6. 在图片或文件之后追加动态链接。
 7. 渲染完全失败时降级为纯文本消息。
 
-### 10.2 纯文本模式
+### 10.3 原生动态截图模式
 
-`rai=false` 时默认格式为：
+原生模式不改变动态 API 的新旧判断和过滤逻辑，只把已通过过滤的动态 ID 转换为固定的 `opus/{dyn_id}` 地址。浏览器上下文使用现有扫码登录或 `sessdata` 凭据对应的 Cookie，并复用 `proxy`。
+
+首次启动时若缺少 Chromium，`native_browser_install=auto` 会尝试执行固定命令 `python -m playwright install chromium`；`manual` 只记录安装提示；`disable` 不启动浏览器。安装或启动失败不会终止订阅轮询。
+
+页面等待顺序为：DOM 加载、`.bili-opus-view` 可见、字体就绪、容器内图片加载、布局稳定，随后执行元素级 JPEG 截图。
+
+### 10.4 纯文本模式
+
+`render_mode=plain` 时默认格式为：
 
 ```text
 📣 UP 主「作者」动作:

@@ -1,9 +1,9 @@
-name: astrbot_plugin_bilibili # 这是你的插件的唯一识别名。
+name: astrbot_plugin_bilibili_aikaid # 这是你的插件的唯一识别名。
 desc: 哔哩哔哩 UP 主视频、图文、文字、专栏与转发动态订阅提醒插件
 help: 输入 /bili 查看关键词回复帮助。
-version: v1.6.4 # 插件的版本号
-author: "Flartiny & Soulter" # 作者
-repo: https://github.com/Soulter/astrbot_plugin_bilibili # 插件的仓库地址
+version: v0.0.1 # 插件的版本号
+author: "Flartiny & Soulter & Aikaid" # 作者
+repo: https://github.com/ZhangWY0724/astrbot_plugin_bilibili # 插件的仓库地址
 astrbot_version: ">=4.5.2"
 support_platforms:
   - aiocqhttp

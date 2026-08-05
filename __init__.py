@@ -1,1 +1,1 @@
-"""astrbot_plugin_bilibili package."""
+"""astrbot_plugin_bilibili_aikaid package."""

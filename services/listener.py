@@ -19,6 +19,7 @@ from ..core.utils import (
     render_text_to_plain,
 )
 from .dispatcher import SubscriptionNotification, SubscriptionNotificationDispatcher
+from .native_opus_renderer import NativeOpusRenderer, resolve_render_mode
 from .renderer import Renderer
 
 PLAIN_PUSH_ACTIONS = {
@@ -44,6 +45,7 @@ class DynamicListener:
         data_manager: DataManager,
         bili_client: BiliClient,
         renderer: Renderer,
+        native_renderer: Optional[NativeOpusRenderer],
         dispatcher: SubscriptionNotificationDispatcher,
         cfg: dict,
     ):
@@ -51,10 +53,13 @@ class DynamicListener:
         self.data_manager = data_manager
         self.bili_client = bili_client
         self.renderer = renderer
+        self.native_renderer = native_renderer
         self.dispatcher = dispatcher
         self.interval_secs = max(1, int(cfg.get("interval_secs", 300)))
         self.task_gap_secs = self._parse_float(cfg.get("task_gap_secs"), 20, minimum=0)
-        self.rai = cfg.get("rai", True)
+        self.render_mode = resolve_render_mode(
+            cfg.get("render_mode"), cfg.get("rai", True)
+        )
         self.node = cfg.get("node", False)
         self.dynamic_limit = cfg.get("dynamic_limit", 5)
         self.render_cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
@@ -340,13 +345,31 @@ class DynamicListener:
         )
         await self.dispatcher.publish(notification)
 
-    def _cache_render(self, dyn_id: Optional[str], chain_parts: list, send_node: bool):
+    def _cache_render(
+        self,
+        dyn_id: Optional[str],
+        chain_parts: list,
+        send_node: bool,
+        native_output_path: Optional[str] = None,
+    ):
         """缓存渲染结果，避免同一动态在不同会话重复渲染。"""
         if not dyn_id:
             return
-        self.render_cache[dyn_id] = {"chain": chain_parts, "send_node": send_node}
+        previous = self.render_cache.pop(dyn_id, None)
+        if previous and previous.get("native_output_path") != native_output_path:
+            self._release_native_output(previous.get("native_output_path"))
+        self.render_cache[dyn_id] = {
+            "chain": chain_parts,
+            "send_node": send_node,
+            "native_output_path": native_output_path,
+        }
         while len(self.render_cache) > self.render_cache_limit:
-            self.render_cache.popitem(last=False)
+            _, evicted = self.render_cache.popitem(last=False)
+            self._release_native_output(evicted.get("native_output_path"))
+
+    def _release_native_output(self, path: Optional[str]) -> None:
+        if self.native_renderer is not None:
+            self.native_renderer.release_output(path)
 
     async def _handle_new_dynamic(
         self,
@@ -354,6 +377,7 @@ class DynamicListener:
         payload: Optional[RenderPayload],
         dyn_id: Optional[str] = None,
         sub_data: Optional[SubscriptionRecord] = None,
+        use_cache: bool = True,
     ):
         """处理并发送新的动态通知。"""
         if not payload:
@@ -363,7 +387,7 @@ class DynamicListener:
             sub_user, bool(sub_data and sub_data.at_all)
         )
 
-        cached = self.render_cache.get(dyn_id) if dyn_id else None
+        cached = self.render_cache.get(dyn_id) if dyn_id and use_cache else None
         if cached:
             logger.debug(f"动态推送命中缓存: dyn_id={dyn_id} sub_user={sub_user}")
             chain_to_send = self._add_at_components(
@@ -384,71 +408,15 @@ class DynamicListener:
             return
 
         send_node_flag = self.node
-        if not self.rai:
-            if self.plain_push_template:
-                ls = self._compose_template_push(payload)
-            else:
-                ls = self._compose_plain_push(payload)
-            self._cache_render(dyn_id, ls, send_node_flag)
-            chain_to_send = self._add_at_components(
-                list(ls), sub_data, permit_atall=permit_atall
-            )
-            try:
-                await self._send_dynamic(
-                    sub_user,
-                    chain_to_send,
-                    send_node=send_node_flag,
-                    dyn_id=dyn_id,
-                )
-                logger.info(
-                    f"动态推送完成(纯文本): sub_user={sub_user} dyn_id={dyn_id}"
-                )
-            except Exception as e:
-                logger.error(
-                    f"动态推送失败（已缓存并忽略）: sub_user={sub_user} "
-                    f"dyn_id={dyn_id} error={e}"
-                )
-            finally:
-                self._cache_render(dyn_id, ls, send_node_flag)
-            return
-
-        img_path = await self.renderer.render_dynamic(payload)
-        if img_path:
-            platform_name = self._resolve_platform_name(sub_user)
-            url = payload.url
-            if is_height_valid(img_path, platform_name):
-                ls = [Image.fromFileSystem(img_path)]
-            else:
-                timestamp = int(time.time())
-                filename = f"bilibili_dynamic_{timestamp}.jpg"
-                ls = [File(file=img_path, name=filename)]
-            ls.append(Plain(f"\n{url}"))
-            self._cache_render(dyn_id, ls, send_node_flag)
-            chain_to_send = self._add_at_components(
-                list(ls), sub_data, permit_atall=permit_atall
-            )
-            try:
-                await self._send_dynamic(
-                    sub_user,
-                    chain_to_send,
-                    send_node=send_node_flag,
-                    dyn_id=dyn_id,
-                )
-                logger.info(f"动态推送完成(图片): sub_user={sub_user} dyn_id={dyn_id}")
-            except Exception as e:
-                logger.error(
-                    f"动态推送失败（已缓存并忽略）: sub_user={sub_user} "
-                    f"dyn_id={dyn_id} error={e}"
-                )
-            return
-
-        logger.warning(
-            f"渲染图片失败，降级纯文本推送: sub_user={sub_user} dyn_id={dyn_id}"
+        ls, actual_mode, native_output_path = await self._build_render_chain(
+            sub_user, payload, dyn_id
         )
-        if self.plain_push_template:
-            ls = self._compose_template_push(payload, render_fail=True)
-        else:
-            ls = self._compose_plain_push(payload, render_fail=True)
+        if not ls:
+            return
+        if use_cache:
+            self._cache_render(
+                dyn_id, ls, send_node_flag, native_output_path=native_output_path
+            )
         chain_to_send = self._add_at_components(
             list(ls), sub_data, permit_atall=permit_atall
         )
@@ -460,12 +428,68 @@ class DynamicListener:
                 dyn_id=dyn_id,
             )
             logger.info(
-                f"动态推送完成(降级纯文本): sub_user={sub_user} dyn_id={dyn_id}"
+                f"动态推送完成({actual_mode}): sub_user={sub_user} dyn_id={dyn_id}"
             )
         except Exception as e:
             logger.error(
                 f"动态推送失败（已忽略）: sub_user={sub_user} dyn_id={dyn_id} error={e}"
             )
+        finally:
+            if not use_cache:
+                self._release_native_output(native_output_path)
+
+    async def _build_render_chain(
+        self, sub_user: str, payload: RenderPayload, dyn_id: Optional[str]
+    ) -> Tuple[list, str, Optional[str]]:
+        """按配置构建消息链，原生模式失败时依次降级到卡片和纯文本。"""
+        if self.render_mode == "plain":
+            return self._build_plain_chain(payload), "纯文本", None
+
+        if self.render_mode == "native":
+            if self.native_renderer is not None and dyn_id:
+                native_path = await self.native_renderer.render_dynamic(dyn_id)
+                if native_path:
+                    opus_url = f"https://www.bilibili.com/opus/{dyn_id}"
+                    return (
+                        self._build_image_chain(sub_user, native_path, opus_url),
+                        "原生截图",
+                        native_path,
+                    )
+            logger.warning(f"原生动态渲染失败，降级卡片: dyn_id={dyn_id}")
+
+        img_path = await self.renderer.render_dynamic(payload)
+        if img_path:
+            return (
+                self._build_image_chain(sub_user, img_path, payload.url),
+                "卡片图片",
+                None,
+            )
+
+        logger.warning(f"卡片渲染失败，降级纯文本: dyn_id={dyn_id}")
+        return (
+            self._build_plain_chain(payload, render_fail=True),
+            "降级纯文本",
+            None,
+        )
+
+    def _build_plain_chain(
+        self, payload: RenderPayload, render_fail: bool = False
+    ) -> list:
+        if self.plain_push_template:
+            return self._compose_template_push(payload, render_fail=render_fail)
+        return self._compose_plain_push(payload, render_fail=render_fail)
+
+    def _build_image_chain(self, sub_user: str, img_path: str, url: str) -> list:
+        platform_name = self._resolve_platform_name(sub_user)
+        if is_height_valid(img_path, platform_name):
+            chain = [Image.fromFileSystem(img_path)]
+        else:
+            timestamp = int(time.time())
+            filename = f"bilibili_dynamic_{timestamp}.jpg"
+            chain = [File(file=img_path, name=filename)]
+        if url:
+            chain.append(Plain(f"\n{url}"))
+        return chain
 
     def _resolve_platform_name(self, sub_user: str) -> str:
         """解析 sub_user 所属平台的类型名（如 telegram、aiocqhttp）。"""

@@ -31,10 +31,30 @@
         "default": false
     },
     "rai": {
-        "description": "render_as_image",
+        "description": "旧版图片渲染开关",
         "type": "bool",
-        "hint": "是否以图片形式渲染动态推送",
+        "hint": "仅在渲染方式为 auto 时生效，用于兼容旧配置。",
         "default": true
+    },
+    "render_mode": {
+        "description": "动态渲染方式",
+        "type": "string",
+        "hint": "auto 兼容旧版 rai；plain 为纯文本；card 为插件卡片；native 为 Bilibili 原生页面截图。原生截图失败会依次降级为卡片和纯文本。",
+        "options": ["auto", "plain", "card", "native"],
+        "default": "auto"
+    },
+    "native_browser_install": {
+        "description": "原生渲染浏览器安装策略",
+        "type": "string",
+        "hint": "auto 首次使用时自动安装 Chromium；manual 仅提示手动安装；disable 禁用原生浏览器。",
+        "options": ["auto", "manual", "disable"],
+        "default": "auto"
+    },
+    "native_browser_timeout_secs": {
+        "description": "原生页面截图超时",
+        "type": "int",
+        "hint": "打开 Bilibili 动态页面、等待容器和截图的超时时间（秒）。",
+        "default": 30
     },
     "renderer_template": {
         "description": "renderer_template",

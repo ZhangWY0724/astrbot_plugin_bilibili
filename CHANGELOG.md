@@ -1,4 +1,7 @@
 ## 未发布
+- 插件唯一标识调整为 `astrbot_plugin_bilibili_aikaid`，避免与上游插件冲突，并兼容迁移旧标识下的登录凭据和订阅数据。
+- 新增 `render_mode` 三态渲染：纯文本、插件卡片和 Bilibili 原生动态截图。原生模式使用 Playwright 无头 Chromium、复用登录 Cookie 与代理，并在失败时降级。
+- 按 AstrBot 插件规范声明 Playwright Python 依赖；首次原生渲染可按配置自动准备 Chromium 运行时。
 - 将插件功能收敛为 Bilibili 订阅提醒，保留扫码登录、凭据持久化、订阅管理和定时检测。
 - 移除番剧推荐、QQ 小程序解析、BV 自动解析以及 Bilibili/Bangumi LLM Function Tools。
 - 移除直播状态检测、开播/下播提醒及相关订阅字段。

@@ -24,7 +24,9 @@ AT_ALL_OPTION = "at_all"
 AT_SUB_OPTION = "at_sub"
 UNAT_SUB_OPTION = "unat_sub"
 VALID_SUB_OPTIONS = {AT_ALL_OPTION, AT_SUB_OPTION, UNAT_SUB_OPTION}
-DATA_PATH = "data/astrbot_plugin_bilibili.json"
+PLUGIN_NAME = "astrbot_plugin_bilibili_aikaid"
+LEGACY_PLUGIN_NAME = "astrbot_plugin_bilibili"
+DATA_PATH = f"data/{LEGACY_PLUGIN_NAME}.json"
 DEFAULT_CFG = {
     "bili_sub_list": {},  # sub_user -> [{"uid": "uid", "last": "last_dynamic_id", ...}]
     "credential": None,

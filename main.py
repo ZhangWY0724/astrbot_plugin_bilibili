@@ -23,6 +23,7 @@ from .core.constant import (
     CARD_TEMPLATES,
     DEFAULT_TEMPLATE,
     LOGO_PATH,
+    PLUGIN_NAME,
     RECENT_DYNAMIC_CACHE,
     RECONNECT_SILENT_PADDING_SECS,
     RECONNECT_SILENT_THRESHOLD_SECS,
@@ -36,18 +37,21 @@ from .core.models import RenderPayload, SubscriptionRecord
 from .core.utils import create_qrcode, image_to_base64, is_valid_umo
 from .services.dispatcher import SubscriptionNotificationDispatcher
 from .services.listener import DynamicListener
+from .services.native_opus_renderer import NativeOpusRenderer, resolve_render_mode
 from .services.renderer import Renderer
 from .services.subscription_service import SubscriptionService
 
 
-@register("astrbot_plugin_bilibili", "Soulter", "", "", "")
+@register(PLUGIN_NAME, "Flartiny & Soulter & Aikaid", "", "", "")
 class Main(Star):
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.cfg = config
         self.context = context
 
-        self.rai = self.cfg.get("rai", True)
+        self.render_mode = resolve_render_mode(
+            self.cfg.get("render_mode"), self.cfg.get("rai", True)
+        )
         self.proxy = (self.cfg.get("proxy", "") or "").strip()
         # 读取样式配置
         self.style = self.cfg.get("renderer_template", DEFAULT_TEMPLATE)
@@ -57,7 +61,7 @@ class Main(Star):
                 "recent_dynamic_cache", RECENT_DYNAMIC_CACHE
             )
         )
-        self.renderer = Renderer(self, self.rai, self.style)
+        self.renderer = Renderer(self, self.render_mode != "plain", self.style)
         self._last_notify_write_ts = self.data_manager.get_last_success_sub_notify_ts()
         self.notification_dispatcher = SubscriptionNotificationDispatcher(
             context=self.context,
@@ -74,12 +78,19 @@ class Main(Star):
             self.bili_client = BiliClient(
                 sessdata=self.cfg.get("sessdata"), proxy=self.proxy
             )
+        self.native_renderer = NativeOpusRenderer(
+            credential_provider=lambda: self.bili_client.get_credential_dict(),
+            proxy=self.proxy,
+            install_mode=self.cfg.get("native_browser_install", "auto"),
+            timeout_secs=self.cfg.get("native_browser_timeout_secs", 30),
+        )
 
         self.dynamic_listener = DynamicListener(
             context=self.context,
             data_manager=self.data_manager,
             bili_client=self.bili_client,
             renderer=self.renderer,
+            native_renderer=self.native_renderer,
             dispatcher=self.notification_dispatcher,
             cfg=self.cfg,
         )
@@ -213,7 +224,7 @@ class Main(Star):
         self, event: AstrMessageEvent, payload: RenderPayload, avatar: str
     ) -> MessageEventResult | None:
         text = "\n".join(filter(None, payload.text.split("<br>")))
-        if self.rai:
+        if self.render_mode != "plain":
             img_path = await self.renderer.render_dynamic(payload)
             if img_path:
                 await event.send(
@@ -627,11 +638,11 @@ class Main(Star):
         )
 
         render_data: RenderPayload | None = None
-        # dyn_id = None
+        dyn_id: str | None = None
         for result in result_list or []:
             if result.has_payload():
                 render_data = result.payload
-                # dyn_id = result.dyn_id
+                dyn_id = result.dyn_id
                 break
 
         if not render_data:
@@ -641,7 +652,7 @@ class Main(Star):
 
         # 测试命令需要每次基于当前代码重新构造消息，避免命中同 dyn_id 的历史缓存。
         await self.dynamic_listener._handle_new_dynamic(
-            sub_user, render_data, None, sub_data=sub_data
+            sub_user, render_data, dyn_id, sub_data=sub_data, use_cache=False
         )
         event.stop_event()
 
@@ -662,3 +673,5 @@ class Main(Star):
                 logger.error(
                     f"Error awaiting cancellation of dynamic_listener task: {e}"
                 )
+        if hasattr(self, "native_renderer"):
+            await self.native_renderer.close()

@@ -4,7 +4,7 @@
 
 ## 1. 项目定位
 
-本项目是 AstrBot 的 Bilibili 订阅提醒插件，插件标识为 `astrbot_plugin_bilibili`。主要能力包括：
+本项目是 AstrBot 的 Bilibili 订阅提醒插件，插件标识为 `astrbot_plugin_bilibili_aikaid`。主要能力包括：
 
 - 管理按会话（UMO）隔离的 UP 主动态订阅；
 - 轮询、过滤、渲染并向多个 AstrBot 平台推送通知；
@@ -96,7 +96,7 @@ python "dev_ui.py"
 - 改 Python：至少执行 `compileall`，并运行相关测试；提交前按 AstrBot 官方要求使用 Ruff 格式化。
 - 改配置：解析 `_conf_schema.json`，核对每个变更字段的运行时读取与默认值。
 - 改模板：启动预览服务器并检查相关模拟场景；生产环境图片渲染仍应在 AstrBot 本体内复验。
-- 改 Handler、推送或平台适配：在 AstrBot 本体的 `data/plugins/astrbot_plugin_bilibili` 环境中热重载，检查插件加载日志和实际消息链。
+- 改 Handler、推送或平台适配：在 AstrBot 本体的 `data/plugins/astrbot_plugin_bilibili_aikaid` 环境中热重载，检查插件加载日志和实际消息链。
 - 改后台任务：验证重载/停用后没有遗留任务、重复轮询或重复推送。
 
 当前仓库未提供自动化测试目录。对于共享模型、过滤、调度、持久化或平台解析的非简单变更，应新增聚焦的 `tests/` 用例；不得以手工验证替代所有可自动化的纯逻辑测试。

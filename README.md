@@ -1,4 +1,4 @@
-# astrbot_plugin_bilibili
+# astrbot_plugin_bilibili_aikaid
 
 这是一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的 Bilibili 订阅提醒插件。
 
@@ -7,7 +7,7 @@
 - **UP 主动态订阅**：支持视频、图文、文字、专栏和转发动态。
 - **定时检测与去重**：按 UID 合并轮询，避免同一动态重复提醒。
 - **灵活过滤**：支持按动态类型、关键词正则和互动抽奖规则过滤。
-- **多种提醒方式**：支持图片卡片、纯文本降级和群聊提醒。
+- **多种提醒方式**：支持纯文本、插件图片卡片和 Bilibili 原生动态截图，并提供自动降级。
 - **登录与凭据持久化**：支持管理员扫码登录，并在插件数据目录保存登录凭据。
 
 ![image](https://github.com/user-attachments/assets/972b2b99-b801-45cf-a882-6d841c9e8137)
@@ -17,7 +17,7 @@
 - 通过以下指令进行安装：
 
 ```shell
-plugin i https://github.com/Soulter/astrbot_plugin_bilibili
+plugin i https://github.com/ZhangWY0724/astrbot_plugin_bilibili
 ```
 
 ## ⚙️ 配置
@@ -29,6 +29,19 @@ plugin i https://github.com/Soulter/astrbot_plugin_bilibili
 
 2. 使用`/bili_login`指令获取登录二维码，扫码登录后插件会自动获取并保存凭据。
 此方式有利于解决[issue #58](https://github.com/Soulter/astrbot_plugin_bilibili/issues/58)所述412问题。不推荐使用主账号登录。
+
+### 渲染方式
+
+配置项 `render_mode` 控制动态提醒的内容形式：
+
+- `auto`：兼容旧版 `rai` 配置；`rai=true` 使用插件卡片，`rai=false` 使用纯文本。
+- `plain`：纯文本消息。
+- `card`：使用 AstrBot HTML 模板生成图片卡片。
+- `native`：使用插件自带的 Playwright 无头 Chromium 打开 `https://www.bilibili.com/opus/{动态ID}`，截取 Bilibili 页面中的 `.bili-opus-view` 容器。
+
+`native` 模式失败时会自动降级为 `card`，卡片也失败时再降级为纯文本。原生模式首次使用可能需要下载 Chromium；可通过 `native_browser_install` 选择 `auto`、`manual` 或 `disable`。Python 依赖由插件目录下的 `requirements.txt` 按 AstrBot 规范安装，Chromium 浏览器运行时不打包进插件仓库。
+
+原生渲染使用配置项 `proxy`，与 Bilibili API 请求共用代理；扫码登录和持久化凭据会转换为浏览器 Cookie 使用，不会新增登录体系。
 
 
 ## 📖 使用说明
@@ -92,7 +105,7 @@ plugin i https://github.com/Soulter/astrbot_plugin_bilibili
 
 3. AstrBot更新到4.0版本后订阅失效  
 UMO结构发生了变化，已为"全局列表"指令添加了具体订阅信息，使用该指令查看后重新订阅即可。  
-简便的方法是进入data/plugin_data/astrbot_plugin_bilibili文件夹修改UMO的第一部分（使用"/sid"指令了解区别）。
+简便的方法是进入 `data/plugin_data/astrbot_plugin_bilibili_aikaid` 文件夹修改 UMO 的第一部分（使用 `/sid` 指令了解区别）。
 
 4. 使用新渲染模板发不出图片  
 由于图文动态布局采用了纵向布局，如果图片过长，受限于qq本身机制，需以文件形式发送。  

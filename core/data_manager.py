@@ -6,7 +6,13 @@ from typing import Any, Dict, List, Optional
 from astrbot.api import logger
 from astrbot.api.star import StarTools
 
-from .constant import DATA_PATH, DEFAULT_CFG, RECENT_DYNAMIC_CACHE
+from .constant import (
+    DATA_PATH,
+    DEFAULT_CFG,
+    LEGACY_PLUGIN_NAME,
+    PLUGIN_NAME,
+    RECENT_DYNAMIC_CACHE,
+)
 from .models import SubscriptionRecord
 
 
@@ -18,16 +24,28 @@ class DataManager:
     def __init__(self, recent_dynamic_cache: int = RECENT_DYNAMIC_CACHE):
         self.recent_dynamic_cache = recent_dynamic_cache
         standard_data_path = os.path.join(
-            StarTools.get_data_dir(plugin_name="astrbot_plugin_bilibili"),
-            "astrbot_plugin_bilibili.json",
+            StarTools.get_data_dir(plugin_name=PLUGIN_NAME),
+            f"{PLUGIN_NAME}.json",
         )
-        if os.path.exists(DATA_PATH) and not os.path.exists(standard_data_path):
-            # 复制旧数据文件到标准路径
+        legacy_standard_path = os.path.join(
+            StarTools.get_data_dir(plugin_name=LEGACY_PLUGIN_NAME),
+            f"{LEGACY_PLUGIN_NAME}.json",
+        )
+        migration_source = next(
+            (
+                path
+                for path in (legacy_standard_path, DATA_PATH)
+                if os.path.exists(path)
+            ),
+            None,
+        )
+        if migration_source and not os.path.exists(standard_data_path):
+            # 改名后复制旧插件数据，保留登录凭据、订阅和动态游标。
             os.makedirs(os.path.dirname(standard_data_path), exist_ok=True)
-            with open(DATA_PATH, "r", encoding="utf-8-sig") as src:
+            with open(migration_source, "r", encoding="utf-8-sig") as src:
                 with open(standard_data_path, "w", encoding="utf-8") as dst:
                     dst.write(src.read())
-            logger.info(f"已将旧数据文件迁移到标准路径: {standard_data_path}")
+            logger.info(f"已将旧插件数据迁移到新插件目录: {standard_data_path}")
         self.path = standard_data_path
         self.data = self._load_data()
         self._normalize_subscriptions()
