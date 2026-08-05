@@ -84,6 +84,11 @@ class Main(Star):
             install_mode=self.cfg.get("native_browser_install", "auto"),
             timeout_secs=self.cfg.get("native_browser_timeout_secs", 30),
         )
+        self.native_browser_task = None
+        if self.render_mode == "native":
+            self.native_browser_task = asyncio.create_task(
+                self.native_renderer.prepare_browser()
+            )
 
         self.dynamic_listener = DynamicListener(
             context=self.context,
@@ -657,6 +662,16 @@ class Main(Star):
         event.stop_event()
 
     async def terminate(self):
+        if (
+            hasattr(self, "native_browser_task")
+            and self.native_browser_task
+            and not self.native_browser_task.done()
+        ):
+            self.native_browser_task.cancel()
+            try:
+                await self.native_browser_task
+            except asyncio.CancelledError:
+                pass
         if (
             hasattr(self, "dynamic_listener_task")
             and self.dynamic_listener_task

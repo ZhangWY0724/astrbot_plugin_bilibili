@@ -105,6 +105,22 @@ class NativeOpusRenderer:
                 )
                 return None
 
+    async def prepare_browser(self) -> bool:
+        """在插件启动阶段准备 Chromium，避免首次推送才触发下载。"""
+        if self.install_mode == "disable":
+            return False
+        async with self._lock:
+            try:
+                if self._browser is not None and self._browser.is_connected():
+                    return True
+                await self._reset_browser_objects()
+                return await self._start_browser()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.error(f"插件启动阶段准备 Chromium 失败: {exc}")
+                return False
+
     async def _ensure_context(self):
         credentials = self.credential_provider() or {}
         fingerprint = tuple(
@@ -221,6 +237,10 @@ class NativeOpusRenderer:
             return False
         try:
             return_code = await asyncio.wait_for(process.wait(), timeout=600)
+        except asyncio.CancelledError:
+            process.kill()
+            await process.wait()
+            raise
         except asyncio.TimeoutError:
             process.kill()
             await process.wait()
