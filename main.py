@@ -1,7 +1,5 @@
 import asyncio
-import json
 import os
-import re
 import tempfile
 import time
 from typing import List, Tuple
@@ -10,12 +8,9 @@ from astrbot.api import AstrBotConfig, logger
 from astrbot.api.all import *
 from astrbot.api.event import AstrMessageEvent, MessageChain, MessageEventResult
 from astrbot.api.event.filter import (
-    EventMessageType,
     PermissionType,
     command,
-    event_message_type,
     permission_type,
-    regex,
 )
 from astrbot.api.message_components import Image, Plain
 from astrbot.core.star.filter.command import GreedyStr
@@ -25,7 +20,6 @@ from .bili_client import BiliClient
 from .core.constant import (
     AT_ALL_OPTION,
     AT_SUB_OPTION,
-    BV,
     CARD_TEMPLATES,
     DEFAULT_TEMPLATE,
     LIVE_ATALL_OPTION,
@@ -45,10 +39,6 @@ from .services.dispatcher import SubscriptionNotificationDispatcher
 from .services.listener import DynamicListener
 from .services.renderer import Renderer
 from .services.subscription_service import SubscriptionService
-from .tools.bgm_daily import BgmDailyTool
-from .tools.bgm_subject import BgmAdvancedSubjectSearchTool, BgmRecommendHotSubjectsTool
-from .tools.bili_hot_video import BiliSearchHotVideosTool
-from .tools.bili_user_dynamics import BiliUserDynamicsTool
 
 
 @register("astrbot_plugin_bilibili", "Soulter", "", "", "")
@@ -59,10 +49,7 @@ class Main(Star):
         self.context = context
 
         self.rai = self.cfg.get("rai", True)
-        self.enable_parse_miniapp = self.cfg.get("enable_parse_miniapp", True)
-        self.enable_parse_BV = self.cfg.get("enable_parse_BV", True)
         self.proxy = (self.cfg.get("proxy", "") or "").strip()
-        self.bangumi_token = (self.cfg.get("bangumi_token", "") or "").strip()
         # 读取样式配置
         self.style = self.cfg.get("renderer_template", DEFAULT_TEMPLATE)
 
@@ -102,25 +89,6 @@ class Main(Star):
             bili_client=self.bili_client,
             parse_dynamics=self.dynamic_listener._parse_and_filter_dynamics,
         )
-        llm_tools = (
-            BgmAdvancedSubjectSearchTool(
-                token=self.bangumi_token,
-            ),
-            BgmRecommendHotSubjectsTool(
-                token=self.bangumi_token,
-            ),
-            BgmDailyTool(
-                token=self.bangumi_token,
-            ),
-            BiliSearchHotVideosTool(
-                bili_client=self.bili_client,
-            ),
-            BiliUserDynamicsTool(
-                bili_client=self.bili_client,
-                parse_dynamics=self.dynamic_listener._parse_and_filter_dynamics,
-            ),
-        )
-        self.context.add_llm_tools(*llm_tools)
         self._configure_reconnect_silent()
 
         self._start_tasks()
@@ -393,62 +361,6 @@ class Main(Star):
             f"✅ 已切换样式为：{info['name']} ({style})"
         )
 
-    @regex(BV)
-    async def get_video_info(self, event: AstrMessageEvent):
-        if self.enable_parse_BV:
-            match_ = re.search(BV, event.message_str, re.IGNORECASE)
-            if not match_:
-                return
-            # 匹配到短链接
-            if match_.group(2):
-                full_link = match_.group(0)
-                converted_url = await self.bili_client.b23_to_bv(full_link)
-                if not converted_url:
-                    return
-                match_bv = re.search(r"(BV[a-zA-Z0-9]+)", converted_url, re.IGNORECASE)
-                if match_bv:
-                    bvid = match_bv.group(1)
-                else:
-                    return
-            # 匹配到长链接
-            elif match_.group(1):
-                bvid = match_.group(1)
-            # 匹配到纯 BV 号
-            elif match_.group(0):
-                bvid = match_.group(0)
-
-            video_data = await self.bili_client.get_video_info(bvid=bvid)
-            if not video_data:
-                return await event.send(
-                    MessageChain().message("获取视频信息失败了 (´;ω;`)")
-                )
-            info = video_data["info"]
-            online = video_data["online"]
-
-            payload = RenderPayload(
-                name="AstrBot",
-                avatar=image_to_base64(LOGO_PATH),
-                title=info["title"],
-                text=(
-                    f"UP 主: {info['owner']['name']}<br>"
-                    f"播放量: {info['stat']['view']}<br>"
-                    f"点赞: {info['stat']['like']}<br>"
-                    f"投币: {info['stat']['coin']}<br>"
-                    f"总共 {online['total']} 人正在观看"
-                ),
-                image_urls=[info["pic"]],
-            )
-
-            img_path = await self.renderer.render_dynamic(payload)
-            if img_path:
-                await event.send(MessageChain().file_image(img_path))
-            else:
-                msg = "渲染图片失败了 (´;ω;`)"
-                text = "\n".join(filter(None, payload.text.split("<br>")))
-                await event.send(
-                    MessageChain().message(msg).message(text).url_image(info["pic"])
-                )
-
     @command("bili_sub", alias={"订阅动态"})
     async def dynamic_sub(self, event: AstrMessageEvent, uid: str, input: GreedyStr):
         filter_types, filter_regex, live_atall, at_all, at_sub, unat_sub = (
@@ -707,47 +619,6 @@ class Main(Star):
                 uid = sub.uid
                 ret += f"  - {uid}\n"
         return MessageEventResult().message(ret)
-
-    @event_message_type(EventMessageType.ALL)
-    async def parse_miniapp(self, event: AstrMessageEvent):
-        if self.enable_parse_miniapp:
-            for msg_element in event.message_obj.message:
-                if (
-                    hasattr(msg_element, "type")
-                    and msg_element.type == "Json"
-                    and hasattr(msg_element, "data")
-                ):
-                    json_string = msg_element.data
-
-                    try:
-                        if isinstance(json_string, dict):
-                            parsed_data = json_string
-                        else:
-                            parsed_data = json.loads(json_string)
-                        meta = parsed_data.get("meta", {})
-                        detail_1 = meta.get("detail_1", {})
-                        title = detail_1.get("title")
-                        qqdocurl = detail_1.get("qqdocurl")
-                        desc = detail_1.get("desc")
-
-                        if title == "哔哩哔哩" and qqdocurl:
-                            if "https://b23.tv" in qqdocurl:
-                                qqdocurl = await self.bili_client.b23_to_bv(qqdocurl)
-                            ret = f"标题: {desc}\n链接: {qqdocurl}"
-                            await event.send(MessageChain().message(ret))
-                        news = meta.get("news", {})
-                        tag = news.get("tag", "")
-                        jumpurl = news.get("jumpUrl", "")
-                        title = news.get("title", "")
-                        if tag == "哔哩哔哩" and jumpurl:
-                            if "https://b23.tv" in jumpurl:
-                                jumpurl = await self.bili_client.b23_to_bv(jumpurl)
-                            ret = f"标题: {title}\n链接: {jumpurl}"
-                            await event.send(MessageChain().message(ret))
-                    except json.JSONDecodeError:
-                        logger.error(f"Failed to decode JSON string: {json_string}")
-                    except Exception as e:
-                        logger.error(f"An error occurred during JSON processing: {e}")
 
     @command("bili_sub_test", alias={"订阅测试"})
     async def sub_test(self, event: AstrMessageEvent, uid: str):

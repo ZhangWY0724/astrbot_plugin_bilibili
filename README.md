@@ -1,20 +1,14 @@
 # astrbot_plugin_bilibili
 
-这是一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的多功能 Bilibili 插件。
+这是一个为 [AstrBot](https://github.com/AstrBotDevs/AstrBot) 设计的 Bilibili 订阅提醒插件。
 
 ## ✨ 功能特性
 
-  - **Bilibili 视频解析**：自动识别消息中的 `BV` 号，并返回视频的详细信息。
-  - **UP 主动态订阅**：
-      - 支持订阅 `视频动态`、`图文动态` 和 `直播`。
-      - 提供灵活的关键词和类型过滤。
-      - 默认每个 UP 主检测周期为 `300` 秒（5 分钟），任务间最小间隔为 `20` 秒，可根据需要在插件配置中修改。
-   - **推荐番剧**
-      - 试着对 LLM 说 `推荐一些催泪的番剧，2016年之后的`。
-      - 支持类别、番剧起始年份、番剧结束年份、番剧季度（一月番等）
-      - 需要支持函数调用的 LLM。如 gpt-4o-mini
-  - **QQ 小程序解析**：自动识别并解析 QQ 聊天中分享的 Bilibili 小程序，提取并返回直链。
-  - 后续还会增加更多功能！！
+- **UP 主动态订阅**：支持订阅视频动态、图文动态和直播状态。
+- **定时检测与去重**：按 UID 合并轮询，避免同一动态重复提醒。
+- **灵活过滤**：支持按动态类型、关键词正则和互动抽奖规则过滤。
+- **多种提醒方式**：支持图片卡片、纯文本降级、群聊提醒和可选 AI 总结。
+- **登录与凭据持久化**：支持管理员扫码登录，并在插件数据目录保存登录凭据。
 
 ![image](https://github.com/user-attachments/assets/972b2b99-b801-45cf-a882-6d841c9e8137)
 ## 🚀 安装
@@ -28,8 +22,7 @@ plugin i https://github.com/Soulter/astrbot_plugin_bilibili
 
 ## ⚙️ 配置
 
-插件至少需要配置 `sessdata` 才能正常获取 Bilibili 数据。
-以下是两种配置方式：
+插件需要有效的 Bilibili 登录凭据才能稳定获取订阅数据。可使用以下两种方式：
 1. 参考 [此指南](https://nemo2011.github.io/bilibili-api/#/get-credential) 获取你的 `sessdata`。
 
 <img width="1453" alt="image" src="https://github.com/user-attachments/assets/d5342767-8e5c-4222-81da-f1cdb4b30c95">
@@ -89,7 +82,8 @@ plugin i https://github.com/Soulter/astrbot_plugin_bilibili
 ## 适用平台/适配器
 
   - aiocqhttp
-  - nakuru
+  - telegram
+  - weixin_oc
 
 ## 常见问题
 

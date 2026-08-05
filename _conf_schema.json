@@ -11,12 +11,6 @@
         "hint": "Bilibili API 请求代理地址。示例: http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，留空则直连。",
         "default": ""
     },
-    "bangumi_token": {
-        "description": "bangumi_token",
-        "type": "string",
-        "hint": "可选。Bangumi Access Token。调用需要授权的接口时请填写。",
-        "invisible": true
-    },
     "interval_secs": {
         "description": "interval_secs",
         "type": "int",
@@ -54,18 +48,6 @@
         "type": "bool",
         "hint": "是否以转发消息形式推送动态消息",
         "default": false
-    },
-    "enable_parse_miniapp": {
-        "description": "enable_parse_miniapp",
-        "type": "bool",
-        "hint": "是否解析小程序",
-        "default": true
-    },
-    "enable_parse_BV": {
-        "description": "enable_parse_BV",
-        "type": "bool",
-        "hint": "是否解析B站视频链接",
-        "default": true
     },
     "dynamic_limit": {
         "description": "dynamic_limit",
