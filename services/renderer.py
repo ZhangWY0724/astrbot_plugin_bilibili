@@ -1,4 +1,5 @@
 import asyncio
+import html
 import os
 from typing import Any, Dict
 
@@ -14,8 +15,10 @@ from ..core.constant import (
     RETRY_DELAY,
     get_template_path,
 )
-from ..core.models import RenderPayload
+from ..core.models import ContentBlock, RenderPayload
 from ..core.utils import create_qrcode, image_to_base64, parse_rich_text
+
+ARTICLE_IMAGE_MAX_WIDTH = 1020
 
 
 def load_template(style: str) -> str:
@@ -124,6 +127,7 @@ class Renderer:
             avatar=str(author_module.get("face") or ""),
             pendant=str((author_module.get("pendant") or {}).get("image") or ""),
             type=str(item.get("type") or ""),
+            pub_time=str(author_module.get("pub_time") or ""),
         )
 
     def _fill_video_payload(
@@ -171,6 +175,112 @@ class Renderer:
             else:
                 payload.url = f"https://www.bilibili.com/{jump_url.lstrip('/')}"
             payload.qrcode = create_qrcode(payload.url)
+        return payload
+
+    @staticmethod
+    def _resolve_opus_url(url: Any) -> str:
+        value = str(url or "")
+        if value.startswith("//"):
+            return f"https:{value}"
+        if value.startswith("http://"):
+            return f"https://{value.removeprefix('http://')}"
+        return value
+
+    @classmethod
+    def _render_opus_text_nodes(cls, nodes: Any) -> str:
+        if not isinstance(nodes, list):
+            return ""
+
+        fragments = []
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            word = node.get("word")
+            if isinstance(word, dict):
+                text = html.escape(str(word.get("words") or ""))
+                if text and bool((word.get("style") or {}).get("bold")):
+                    text = f"<strong>{text}</strong>"
+                fragments.append(text)
+                continue
+
+            rich = node.get("rich")
+            if not isinstance(rich, dict):
+                continue
+            text = html.escape(str(rich.get("text") or ""))
+            emoji = rich.get("emoji")
+            if isinstance(emoji, dict) and emoji.get("icon_url"):
+                src = html.escape(
+                    cls._resolve_opus_url(emoji.get("icon_url")), quote=True
+                )
+                fragments.append(f'<img src="{src}" alt="{text}">')
+                continue
+
+            jump_url = cls._resolve_opus_url(rich.get("jump_url"))
+            if jump_url:
+                href = html.escape(jump_url, quote=True)
+                fragments.append(f'<a href="{href}">{text}</a>')
+            else:
+                fragments.append(text)
+        return "".join(fragments)
+
+    @staticmethod
+    def _resolve_content_align(value: Any) -> str:
+        return {1: "center", 2: "right"}.get(value, "left")
+
+    @classmethod
+    def _resolve_article_image_url(cls, picture: Dict[str, Any]) -> str:
+        url = cls._resolve_opus_url(picture.get("url"))
+        try:
+            width = int(picture.get("width") or 0)
+        except (TypeError, ValueError):
+            width = 0
+        filename = url.rsplit("/", 1)[-1]
+        if (
+            width > ARTICLE_IMAGE_MAX_WIDTH
+            and "hdslb.com/" in url
+            and "@" not in filename
+        ):
+            return f"{url}@{ARTICLE_IMAGE_MAX_WIDTH}w.webp"
+        return url
+
+    @classmethod
+    def build_article_content_blocks(
+        cls, detail: Optional[Dict[str, Any]]
+    ) -> list[ContentBlock]:
+        item = (detail or {}).get("item") or {}
+        blocks: list[ContentBlock] = []
+        for module in item.get("modules") or []:
+            paragraphs = (module.get("module_content") or {}).get("paragraphs") or []
+            for paragraph in paragraphs:
+                if not isinstance(paragraph, dict):
+                    continue
+                align = cls._resolve_content_align(paragraph.get("align"))
+                if paragraph.get("para_type") == 1:
+                    text = cls._render_opus_text_nodes(
+                        (paragraph.get("text") or {}).get("nodes")
+                    )
+                    if text:
+                        blocks.append(
+                            ContentBlock(kind="text", text=text, align=align)
+                        )
+                elif paragraph.get("para_type") == 2:
+                    image_urls = [
+                        cls._resolve_article_image_url(pic)
+                        for pic in (paragraph.get("pic") or {}).get("pics") or []
+                        if isinstance(pic, dict) and pic.get("url")
+                    ]
+                    if image_urls:
+                        blocks.append(
+                            ContentBlock(
+                                kind="images", image_urls=image_urls, align=align
+                            )
+                        )
+        return blocks
+
+    def enrich_article_payload(
+        self, payload: RenderPayload, detail: Optional[Dict[str, Any]]
+    ) -> RenderPayload:
+        payload.content_blocks = self.build_article_content_blocks(detail)
         return payload
 
     @staticmethod

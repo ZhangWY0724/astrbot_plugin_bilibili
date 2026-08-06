@@ -62,6 +62,7 @@ def create_base_render_data() -> Dict[str, Any]:
         "forward": None,
         "banner": BANNER_BASE64,
         "uid": "",
+        "pub_time": "刚刚",
     }
 
 

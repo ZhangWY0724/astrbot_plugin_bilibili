@@ -35,7 +35,6 @@
 | `services/subscription_service.py` | 新增或更新订阅，首次订阅时初始化动态游标 |
 | `services/listener.py` | UID 调度、动态分类、过滤、提醒组装和发送协调 |
 | `services/renderer.py` | 将动态数据转换为 `RenderPayload` 并渲染 HTML 卡片 |
-| `services/native_opus_renderer.py` | 复用 Bilibili 凭据和代理，使用 Playwright 截取原生动态页面 |
 | `services/dispatcher.py` | 重连静默判断、UMO 消息发送和发送结果封装 |
 | `core/models.py` | 订阅记录、动态解析结果及渲染数据结构 |
 | `core/data_manager.py` | 凭据、订阅游标和订阅配置持久化 |
@@ -245,14 +244,13 @@ UID -> [(UMO, SubscriptionRecord), ...]
 
 ### 10.1 渲染模式选择
 
-`render_mode` 支持 `auto`、`plain`、`card` 和 `native`：
+`render_mode` 支持 `auto`、`plain` 和 `card`：
 
 - `auto` 根据旧版 `rai` 布尔配置兼容为 `plain` 或 `card`。
 - `plain` 直接组装文本消息。
 - `card` 使用 AstrBot `html_render()` 生成插件自定义图片卡片。
-- `native` 通过 Browserless Chromium 打开 `https://www.bilibili.com/opus/{dyn_id}`，等待 `.bili-opus-view` 可见并对该元素截图。
 
-原生模式失败降级为卡片，卡片失败再降级为纯文本。原生渲染器复用 Browserless 连接；每条动态使用独立页面，插件终止时关闭连接。
+旧配置中的 `native` 会在运行时兼容为 `card`。卡片渲染失败时降级为纯文本。
 
 ### 10.2 图片卡片模式
 
@@ -266,19 +264,7 @@ UID -> [(UMO, SubscriptionRecord), ...]
 6. 在图片或文件之后追加动态链接。
 7. 渲染完全失败时降级为纯文本消息。
 
-### 10.3 原生动态截图模式
-
-原生模式不改变动态 API 的新旧判断和过滤逻辑，只把已通过过滤的动态 ID 转换为固定的 `opus/{dyn_id}` 地址。浏览器上下文使用现有扫码登录或 `sessdata` 凭据对应的 Cookie，并复用 `proxy`。
-
-插件通过 `native_browser_ws_url` 连接 Browserless，并使用 `native_browser_token` 完成鉴权。AstrBot 容器不安装 Chromium、不执行系统包管理命令；Browserless 不可用时不会终止订阅轮询，而是进入现有降级链。
-
-页面等待顺序为：DOM 加载、目标动态主体可见、字体就绪、有限滚动懒加载、容器内图片加载、布局稳定，随后执行元素级 JPEG 渲染。`/opus/{dyn_id}` 选择 `.bili-opus-view`；`t.bilibili.com/{dyn_id}` 和直接 `/{dyn_id}` 选择 `.bili-dyn-item`。
-
-浏览器上下文默认使用 `1920×1080` 视口和 `1` 倍设备像素比。视口用于触发标准桌面响应式布局，最终图片按当前页面选定的动态主体实际边界裁剪。
-
-原生渲染使用解析阶段写入 `RenderPayload.url` 的实际 Bilibili 页面地址，并对协议和域名进行校验；无效地址回退为 `opus/{dyn_id}`。视频投稿不进入原生网页截图，继续使用现有卡片图片。渲染前会删除登录浮层和固定导航栏、注入对应隐藏样式。目标元素最高 `6000px`、最多 `600万` 像素，懒加载最多滚动 8 次，JPEG 输出最大 8 MB；超限直接降级卡片，默认最多等待 60 秒。
-
-### 10.4 纯文本模式
+### 10.3 纯文本模式
 
 `render_mode=plain` 时默认格式为：
 

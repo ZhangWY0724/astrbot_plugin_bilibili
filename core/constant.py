@@ -45,8 +45,8 @@ CARD_TEMPLATES: Dict[str, dict] = {
         "path": _asset_path("template_1.html"),
     },
     "template_2": {
-        "name": "B站粉风格",
-        "description": "B站风格设计",
+        "name": "B站动态风格",
+        "description": "接近 Bilibili 动态流主体的紧凑布局",
         "file": "template_2.html",
         "path": _asset_path("template_2.html"),
     },
@@ -60,6 +60,16 @@ CARD_TEMPLATES: Dict[str, dict] = {
 
 # 默认模板
 DEFAULT_TEMPLATE = "template_2"
+
+
+def resolve_render_mode(render_mode: object, legacy_rai: object = True) -> str:
+    """解析渲染模式，并将已移除的原生截图配置兼容为卡片模式。"""
+    normalized = str(render_mode or "auto").strip().lower()
+    if normalized == "plain":
+        return "plain"
+    if normalized in {"card", "native"}:
+        return "card"
+    return "card" if bool(legacy_rai) else "plain"
 
 
 def get_template_path(style: str) -> str:

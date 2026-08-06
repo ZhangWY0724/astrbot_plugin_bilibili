@@ -7,7 +7,7 @@
 - **UP 主动态订阅**：支持视频、图文、文字、专栏和转发动态。
 - **定时检测与去重**：按 UID 合并轮询，避免同一动态重复提醒。
 - **灵活过滤**：支持按动态类型、关键词正则和互动抽奖规则过滤。
-- **多种提醒方式**：支持纯文本、插件图片卡片和 Bilibili 原生动态截图，并提供自动降级。
+- **多种提醒方式**：支持纯文本和插件图片卡片，卡片失败时自动降级为纯文本。
 - **登录与凭据持久化**：支持管理员扫码登录，并在插件数据目录保存登录凭据。
 
 ![image](https://github.com/user-attachments/assets/972b2b99-b801-45cf-a882-6d841c9e8137)
@@ -36,18 +36,9 @@ plugin i https://github.com/ZhangWY0724/astrbot_plugin_bilibili
 
 - `auto`：兼容旧版 `rai` 配置；`rai=true` 使用插件卡片，`rai=false` 使用纯文本。
 - `plain`：纯文本消息。
-- `card`：使用 AstrBot HTML 模板生成图片卡片。
-- `native`：通过 Browserless Chromium 打开 `https://www.bilibili.com/opus/{动态ID}`，截取 Bilibili 页面中的 `.bili-opus-view` 容器。
+- `card`：默认方式。使用动态接口返回的作者、正文和图片，通过 AstrBot HTML 模板生成接近 Bilibili 动态流的图片卡片，不访问动态网页。专栏动态会额外请求 Opus 详情接口，并在新版模板中按原顺序展示完整文字和图片；详情请求失败时回退为摘要和封面。
 
-`native` 模式失败时会自动降级为 `card`，卡片也失败时再降级为纯文本。插件仅保留 Playwright Python 客户端，不会在 AstrBot 容器内下载、安装或启动 Chromium。
-
-启用 `native` 前需独立部署 Browserless，并确保其与 AstrBot 容器位于同一个 Docker 网络。`native_browser_ws_url` 填写内部地址，例如 `ws://browserless:3000`；`native_browser_token` 与 Browserless 容器的 `TOKEN` 环境变量保持一致。连接失败不会阻止插件启动，并会按上述规则降级渲染。
-
-原生渲染使用配置项 `proxy`，与 Bilibili API 请求共用代理；该代理地址必须能从 Browserless 容器访问。扫码登录和持久化凭据会转换为浏览器 Cookie 使用，不会新增登录体系。
-
-原生页面默认使用 `1920×1080` 桌面视口和 `1` 倍设备像素比。`/opus/{动态ID}` 页面渲染 `.bili-opus-view`，`t.bilibili.com/{动态ID}` 或直接 `/{动态ID}` 页面渲染 `.bili-dyn-item`。这里使用的是 Playwright 元素级像素渲染，输出只包含目标 DOM 元素边界，不截取整个浏览器视口。
-
-原生截图使用 Bilibili 接口返回并经过域名校验的实际页面地址。视频投稿继续使用插件卡片图片；其他动态在渲染前会隐藏 `.v-popover-content` 登录浮层和固定导航栏，并有限滚动动态主体以触发懒加载图片。为防止超长动态产生瞬时内存峰值，目标元素最高 `6000px`、最多 `600万` 像素、懒加载最多滚动 8 次、输出最大 8 MB；任一条件超限都会降级为卡片。默认及最低截图超时为 60 秒，可在配置中继续调大。
+新安装默认使用 `card`。旧配置若仍保存 `native`，运行时会自动按 `card` 处理，无需部署浏览器服务。卡片渲染失败时会降级为纯文本。
 
 
 ## 📖 使用说明

@@ -31,13 +31,13 @@ from .core.constant import (
     VALID_FILTER_TYPES,
     VALID_SUB_OPTIONS,
     get_template_names,
+    resolve_render_mode,
 )
 from .core.data_manager import DataManager
 from .core.models import RenderPayload, SubscriptionRecord
 from .core.utils import create_qrcode, image_to_base64, is_valid_umo
 from .services.dispatcher import SubscriptionNotificationDispatcher
 from .services.listener import DynamicListener
-from .services.native_opus_renderer import NativeOpusRenderer, resolve_render_mode
 from .services.renderer import Renderer
 from .services.subscription_service import SubscriptionService
 
@@ -78,27 +78,11 @@ class Main(Star):
             self.bili_client = BiliClient(
                 sessdata=self.cfg.get("sessdata"), proxy=self.proxy
             )
-        self.native_renderer = NativeOpusRenderer(
-            credential_provider=lambda: self.bili_client.get_credential_dict(),
-            proxy=self.proxy,
-            remote_browser_url=self.cfg.get(
-                "native_browser_ws_url", "ws://browserless:3000"
-            ),
-            remote_browser_token=self.cfg.get("native_browser_token", ""),
-            timeout_secs=self.cfg.get("native_browser_timeout_secs", 60),
-        )
-        self.native_browser_task = None
-        if self.render_mode == "native":
-            self.native_browser_task = asyncio.create_task(
-                self.native_renderer.prepare_browser()
-            )
-
         self.dynamic_listener = DynamicListener(
             context=self.context,
             data_manager=self.data_manager,
             bili_client=self.bili_client,
             renderer=self.renderer,
-            native_renderer=self.native_renderer,
             dispatcher=self.notification_dispatcher,
             cfg=self.cfg,
         )
@@ -666,16 +650,6 @@ class Main(Star):
 
     async def terminate(self):
         if (
-            hasattr(self, "native_browser_task")
-            and self.native_browser_task
-            and not self.native_browser_task.done()
-        ):
-            self.native_browser_task.cancel()
-            try:
-                await self.native_browser_task
-            except asyncio.CancelledError:
-                pass
-        if (
             hasattr(self, "dynamic_listener_task")
             and self.dynamic_listener_task
             and not self.dynamic_listener_task.done()
@@ -691,5 +665,3 @@ class Main(Star):
                 logger.error(
                     f"Error awaiting cancellation of dynamic_listener task: {e}"
                 )
-        if hasattr(self, "native_renderer"):
-            await self.native_renderer.close()

@@ -1,7 +1,7 @@
 from typing import Any, Awaitable, Callable, Dict, Optional, Tuple
 
 from astrbot.api import logger
-from bilibili_api import Credential, request_settings, user
+from bilibili_api import Credential, opus, request_settings, user
 
 
 class BiliClient:
@@ -127,6 +127,17 @@ class BiliClient:
             return await u.get_dynamics_new()
         except Exception as e:
             logger.error(f"获取用户动态失败 (UID: {uid}): {e}")
+            return None
+
+    async def get_opus_detail(self, opus_id: int) -> Optional[Dict[str, Any]]:
+        """获取 Opus 完整详情，用于还原专栏的有序正文。"""
+        try:
+            self._apply_proxy()
+            return await opus.Opus(
+                opus_id=opus_id, credential=self.credential
+            ).get_info()
+        except Exception as e:
+            logger.error(f"获取 Opus 详情失败 (ID: {opus_id}): {e}")
             return None
 
     async def get_user_info(self, uid: int) -> Tuple[Dict[str, Any] | None, str]:

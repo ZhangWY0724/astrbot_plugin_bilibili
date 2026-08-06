@@ -32,6 +32,36 @@ def _to_str_list(value: Any) -> List[str]:
 
 
 @dataclass
+class ContentBlock:
+    kind: str = ""
+    text: str = ""
+    image_urls: List[str] = field(default_factory=list)
+    align: str = "left"
+
+    @classmethod
+    def from_dict(cls, raw: Optional[Dict[str, Any]]) -> "ContentBlock":
+        if not isinstance(raw, dict):
+            return cls()
+        align = str(raw.get("align", "left") or "left")
+        if align not in {"left", "center", "right"}:
+            align = "left"
+        return cls(
+            kind=str(raw.get("kind", "") or ""),
+            text=str(raw.get("text", "") or ""),
+            image_urls=_to_str_list(raw.get("image_urls")),
+            align=align,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "text": self.text,
+            "image_urls": list(self.image_urls),
+            "align": self.align,
+        }
+
+
+@dataclass
 class ForwardPayload:
     name: str = ""
     avatar: str = ""
@@ -45,6 +75,7 @@ class ForwardPayload:
     summary: str = ""
     uid: str = ""
     banner: str = ""
+    pub_time: str = ""
 
     @classmethod
     def from_dict(cls, raw: Optional[Dict[str, Any]]) -> "ForwardPayload":
@@ -63,6 +94,7 @@ class ForwardPayload:
             summary=str(raw.get("summary", "") or ""),
             uid=str(raw.get("uid", "") or ""),
             banner=str(raw.get("banner", "") or ""),
+            pub_time=str(raw.get("pub_time", "") or ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -79,6 +111,7 @@ class ForwardPayload:
             "summary": self.summary,
             "uid": self.uid,
             "banner": self.banner,
+            "pub_time": self.pub_time,
         }
 
 
@@ -96,6 +129,8 @@ class RenderPayload:
     summary: str = ""
     uid: str = ""
     banner: str = ""
+    pub_time: str = ""
+    content_blocks: List[ContentBlock] = field(default_factory=list)
     forward: Optional[ForwardPayload] = None
 
     @classmethod
@@ -121,6 +156,12 @@ class RenderPayload:
             summary=str(raw.get("summary", "") or ""),
             uid=str(raw.get("uid", "") or ""),
             banner=str(raw.get("banner", "") or ""),
+            pub_time=str(raw.get("pub_time", "") or ""),
+            content_blocks=[
+                ContentBlock.from_dict(block)
+                for block in raw.get("content_blocks", [])
+                if isinstance(block, dict)
+            ],
             forward=forward_payload,
         )
 
@@ -138,6 +179,8 @@ class RenderPayload:
             "summary": self.summary,
             "uid": self.uid,
             "banner": self.banner,
+            "pub_time": self.pub_time,
+            "content_blocks": [block.to_dict() for block in self.content_blocks],
         }
         if self.forward:
             payload["forward"] = self.forward.to_dict()
@@ -160,6 +203,7 @@ class RenderPayload:
             summary=self.summary,
             uid=self.uid,
             banner=self.banner,
+            pub_time=self.pub_time,
         )
 
 

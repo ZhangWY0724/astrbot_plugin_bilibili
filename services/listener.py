@@ -11,6 +11,7 @@ from astrbot.core.star import Context
 
 from ..bili_client import BiliClient
 from ..core.data_manager import DataManager
+from ..core.constant import resolve_render_mode
 from ..core.models import DynamicParseResult, RenderPayload, SubscriptionRecord
 from ..core.utils import (
     create_qrcode,
@@ -18,12 +19,10 @@ from ..core.utils import (
     is_height_valid,
     render_text_to_plain,
 )
-from .dispatcher import SubscriptionNotification, SubscriptionNotificationDispatcher
-from .native_opus_renderer import (
-    NativeOpusRenderer,
-    resolve_bilibili_page_url,
-    resolve_render_mode,
-    supports_native_render,
+from .dispatcher import (
+    DispatchResult,
+    SubscriptionNotification,
+    SubscriptionNotificationDispatcher,
 )
 from .renderer import Renderer
 
@@ -50,7 +49,6 @@ class DynamicListener:
         data_manager: DataManager,
         bili_client: BiliClient,
         renderer: Renderer,
-        native_renderer: Optional[NativeOpusRenderer],
         dispatcher: SubscriptionNotificationDispatcher,
         cfg: dict,
     ):
@@ -58,7 +56,6 @@ class DynamicListener:
         self.data_manager = data_manager
         self.bili_client = bili_client
         self.renderer = renderer
-        self.native_renderer = native_renderer
         self.dispatcher = dispatcher
         self.interval_secs = max(1, int(cfg.get("interval_secs", 300)))
         self.task_gap_secs = self._parse_float(cfg.get("task_gap_secs"), 20, minimum=0)
@@ -69,6 +66,7 @@ class DynamicListener:
         self.dynamic_limit = cfg.get("dynamic_limit", 5)
         self.render_cache: OrderedDict[str, Dict[str, Any]] = OrderedDict()
         self.render_cache_limit = int(cfg.get("render_cache_limit", 32))
+        self.article_content_cache: OrderedDict[str, list] = OrderedDict()
         self.plain_push_template = (cfg.get("plain_push_template", "") or "").strip()
         self.plain_push_forward_template = (
             cfg.get("plain_push_forward_template", "") or ""
@@ -159,6 +157,9 @@ class DynamicListener:
         if not targets:
             return
 
+        started_at = time.monotonic()
+        logger.info(f"定时动态检测开始: uid={uid} targets={len(targets)}")
+        request_started_at = time.monotonic()
         try:
             dyn = await self.bili_client.get_latest_dynamics(uid)
         except asyncio.CancelledError:
@@ -167,20 +168,44 @@ class DynamicListener:
             logger.error(f"拉取 UID={uid} 动态失败: {e}\n{traceback.format_exc()}")
             dyn = None
 
+        items = dyn.get("items") if isinstance(dyn, dict) else None
+        item_count = len(items) if isinstance(items, list) else 0
+        request_elapsed_ms = int((time.monotonic() - request_started_at) * 1000)
+        logger.info(
+            f"动态接口请求完成: uid={uid} status={'ok' if dyn else 'empty'} "
+            f"item_count={item_count} elapsed_ms={request_elapsed_ms}"
+        )
+
+        discovered = 0
+        filtered = 0
+        sent = 0
         for sub_user, sub_data in targets:
             try:
-                await self._check_single_up(
-                    sub_user=sub_user,
-                    sub_data=sub_data,
-                    dyn=dyn,
-                    shared_payload=True,
+                target_discovered, target_filtered, target_sent = (
+                    await self._check_single_up(
+                        sub_user=sub_user,
+                        sub_data=sub_data,
+                        dyn=dyn,
+                        shared_payload=True,
+                    )
                 )
+                discovered += target_discovered
+                filtered += target_filtered
+                sent += target_sent
             except asyncio.CancelledError:
                 raise
             except Exception as e:
                 logger.error(
-                    f"处理订阅者 {sub_user} 的 UP主 {sub_data.uid} 时发生未知错误: {e}\n{traceback.format_exc()}"
+                    f"处理订阅目标失败: uid={sub_data.uid} "
+                    f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
+                    f"error={e}\n{traceback.format_exc()}"
                 )
+
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
+        logger.info(
+            f"定时动态检测完成: uid={uid} discovered={discovered} "
+            f"filtered={filtered} sent={sent} elapsed_ms={elapsed_ms}"
+        )
 
     async def _check_single_up(
         self,
@@ -188,31 +213,88 @@ class DynamicListener:
         sub_data: SubscriptionRecord,
         dyn: Optional[Dict[str, Any]] = None,
         shared_payload: bool = False,
-    ):
+    ) -> Tuple[int, int, int]:
         """检查单个订阅的UP主是否有更新。"""
         uid = int(sub_data.uid)
+        discovered = 0
+        filtered = 0
+        sent = 0
 
         # 检查动态更新
         if dyn is None and not shared_payload:
             dyn = await self.bili_client.get_latest_dynamics(uid)
         if dyn:
             result_list = self._parse_and_filter_dynamics(dyn, sub_data)
-            sent = 0
+            attempted = 0
             for result in reversed(result_list):
                 if result.has_payload():
-                    if sent < self.dynamic_limit:
-                        sent += 1
-                        await self._handle_new_dynamic(
+                    discovered += 1
+                    logger.info(
+                        f"发现新动态: uid={uid} dyn_id={result.dyn_id} "
+                        f"type={result.payload.type or 'unknown'}"
+                    )
+                    if attempted < self.dynamic_limit:
+                        attempted += 1
+                        if await self._handle_new_dynamic(
                             sub_user, result.payload, result.dyn_id, sub_data
-                        )
+                        ):
+                            sent += 1
                     if result.dyn_id:
                         await self.data_manager.update_last_dynamic_id(
                             sub_user, uid, result.dyn_id
                         )
                 elif result.dyn_id:
+                    filtered += 1
+                    logger.info(
+                        f"动态已过滤: uid={uid} dyn_id={result.dyn_id} "
+                        f"reason={result.reason or 'unknown'}"
+                    )
                     await self.data_manager.update_last_dynamic_id(
                         sub_user, uid, result.dyn_id
                     )
+        return discovered, filtered, sent
+
+    async def _enrich_article_payload(
+        self, payload: RenderPayload, dyn_id: Optional[str]
+    ) -> None:
+        """在专栏发送前补全有序正文，失败时保留列表摘要。"""
+        if not dyn_id:
+            return
+
+        if dyn_id in self.article_content_cache:
+            cached = self.article_content_cache[dyn_id]
+            self.article_content_cache.move_to_end(dyn_id)
+            payload.content_blocks = list(cached)
+            return
+
+        detail = await self.bili_client.get_opus_detail(int(dyn_id))
+        if not detail:
+            self._cache_article_content(dyn_id, [])
+            logger.warning(f"专栏详情获取失败，使用摘要卡片: dyn_id={dyn_id}")
+            return
+
+        self.renderer.enrich_article_payload(payload, detail)
+        if not payload.content_blocks:
+            self._cache_article_content(dyn_id, [])
+            logger.warning(f"专栏详情没有可渲染段落，使用摘要卡片: dyn_id={dyn_id}")
+            return
+
+        self._cache_article_content(dyn_id, payload.content_blocks)
+        image_count = sum(
+            len(block.image_urls)
+            for block in payload.content_blocks
+            if block.kind == "images"
+        )
+        logger.info(
+            f"专栏详情已补全: dyn_id={dyn_id} "
+            f"blocks={len(payload.content_blocks)} images={image_count}"
+        )
+
+    def _cache_article_content(self, dyn_id: str, blocks: list) -> None:
+        self.article_content_cache[dyn_id] = list(blocks)
+        self.article_content_cache.move_to_end(dyn_id)
+        while len(self.article_content_cache) > self.render_cache_limit:
+            self.article_content_cache.popitem(last=False)
 
     def _build_plain_header(self, payload: Any, nested: bool) -> str:
         render_type = payload.type
@@ -341,40 +423,31 @@ class DynamicListener:
         chain_parts: list,
         send_node: bool = False,
         dyn_id: Optional[str] = None,
-    ):
+    ) -> DispatchResult:
         notification = SubscriptionNotification(
             sub_user=sub_user,
             chain_parts=chain_parts,
             send_node=self.node or send_node,
             dyn_id=dyn_id,
         )
-        await self.dispatcher.publish(notification)
+        return await self.dispatcher.publish(notification)
 
     def _cache_render(
         self,
         dyn_id: Optional[str],
         chain_parts: list,
         send_node: bool,
-        native_output_path: Optional[str] = None,
     ):
         """缓存渲染结果，避免同一动态在不同会话重复渲染。"""
         if not dyn_id:
             return
-        previous = self.render_cache.pop(dyn_id, None)
-        if previous and previous.get("native_output_path") != native_output_path:
-            self._release_native_output(previous.get("native_output_path"))
+        self.render_cache.pop(dyn_id, None)
         self.render_cache[dyn_id] = {
             "chain": chain_parts,
             "send_node": send_node,
-            "native_output_path": native_output_path,
         }
         while len(self.render_cache) > self.render_cache_limit:
-            _, evicted = self.render_cache.popitem(last=False)
-            self._release_native_output(evicted.get("native_output_path"))
-
-    def _release_native_output(self, path: Optional[str]) -> None:
-        if self.native_renderer is not None:
-            self.native_renderer.release_output(path)
+            self.render_cache.popitem(last=False)
 
     async def _handle_new_dynamic(
         self,
@@ -383,10 +456,10 @@ class DynamicListener:
         dyn_id: Optional[str] = None,
         sub_data: Optional[SubscriptionRecord] = None,
         use_cache: bool = True,
-    ):
+    ) -> bool:
         """处理并发送新的动态通知。"""
         if not payload:
-            return
+            return False
 
         permit_atall = await self._check_atall_permission(
             sub_user, bool(sub_data and sub_data.at_all)
@@ -394,95 +467,99 @@ class DynamicListener:
 
         cached = self.render_cache.get(dyn_id) if dyn_id and use_cache else None
         if cached:
-            logger.debug(f"动态推送命中缓存: dyn_id={dyn_id} sub_user={sub_user}")
+            logger.debug(
+                f"动态推送命中缓存: dyn_id={dyn_id} "
+                f"platform={self._resolve_platform_name(sub_user) or 'unknown'}"
+            )
             chain_to_send = self._add_at_components(
                 list(cached["chain"]), sub_data, permit_atall=permit_atall
             )
             try:
-                await self._send_dynamic(
+                dispatch_result = await self._send_dynamic(
                     sub_user,
                     chain_to_send,
                     send_node=cached["send_node"],
                     dyn_id=dyn_id,
                 )
+                if dispatch_result.sent:
+                    logger.info(
+                        "动态推送完成(缓存): "
+                        f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
+                        f"dyn_id={dyn_id}"
+                    )
+                else:
+                    logger.warning(
+                        "动态推送未发送(缓存): "
+                        f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
+                        f"dyn_id={dyn_id} "
+                        f"reason={dispatch_result.reason or 'unknown'}"
+                    )
+                return dispatch_result.sent
             except Exception as e:
                 logger.error(
-                    f"发送缓存动态失败（已忽略）: sub_user={sub_user} "
+                    "发送缓存动态失败（已忽略）: "
+                    f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
                     f"dyn_id={dyn_id} error={e}"
                 )
-            return
+                return False
 
         send_node_flag = self.node
-        ls, actual_mode, native_output_path = await self._build_render_chain(
-            sub_user, payload, dyn_id
-        )
+        ls, actual_mode = await self._build_render_chain(sub_user, payload, dyn_id)
         if not ls:
-            return
+            return False
         if use_cache:
-            self._cache_render(
-                dyn_id, ls, send_node_flag, native_output_path=native_output_path
-            )
+            self._cache_render(dyn_id, ls, send_node_flag)
         chain_to_send = self._add_at_components(
             list(ls), sub_data, permit_atall=permit_atall
         )
         try:
-            await self._send_dynamic(
+            dispatch_result = await self._send_dynamic(
                 sub_user,
                 chain_to_send,
                 send_node=send_node_flag,
                 dyn_id=dyn_id,
             )
-            logger.info(
-                f"动态推送完成({actual_mode}): sub_user={sub_user} dyn_id={dyn_id}"
-            )
+            if dispatch_result.sent:
+                logger.info(
+                    f"动态推送完成({actual_mode}): "
+                    f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
+                    f"dyn_id={dyn_id}"
+                )
+            else:
+                logger.warning(
+                    f"动态推送未发送({actual_mode}): "
+                    f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
+                    f"dyn_id={dyn_id} reason={dispatch_result.reason or 'unknown'}"
+                )
+            return dispatch_result.sent
         except Exception as e:
             logger.error(
-                f"动态推送失败（已忽略）: sub_user={sub_user} dyn_id={dyn_id} error={e}"
+                f"动态推送失败（已忽略）: "
+                f"platform={self._resolve_platform_name(sub_user) or 'unknown'} "
+                f"dyn_id={dyn_id} error={e}"
             )
-        finally:
-            if not use_cache:
-                self._release_native_output(native_output_path)
-
+            return False
     async def _build_render_chain(
         self, sub_user: str, payload: RenderPayload, dyn_id: Optional[str]
-    ) -> Tuple[list, str, Optional[str]]:
-        """按配置构建消息链，原生模式失败时依次降级到卡片和纯文本。"""
+    ) -> Tuple[list, str]:
+        """按配置构建消息链，卡片失败时降级为纯文本。"""
         if self.render_mode == "plain":
-            return self._build_plain_chain(payload), "纯文本", None
+            return self._build_plain_chain(payload), "纯文本"
 
-        if self.render_mode == "native":
-            if (
-                supports_native_render(payload.type)
-                and self.native_renderer is not None
-                and dyn_id
-            ):
-                page_url = resolve_bilibili_page_url(payload.url, dyn_id)
-                native_path = await self.native_renderer.render_dynamic(
-                    dyn_id, target_url=page_url
-                )
-                if native_path:
-                    return (
-                        self._build_image_chain(sub_user, native_path, page_url),
-                        "原生截图",
-                        native_path,
-                    )
-                logger.warning(f"原生动态渲染失败，降级卡片: dyn_id={dyn_id}")
-            elif not supports_native_render(payload.type):
-                logger.debug(f"视频动态使用卡片图片: dyn_id={dyn_id}")
+        if payload.type == "DYNAMIC_TYPE_ARTICLE":
+            await self._enrich_article_payload(payload, dyn_id)
 
         img_path = await self.renderer.render_dynamic(payload)
         if img_path:
             return (
                 self._build_image_chain(sub_user, img_path, payload.url),
                 "卡片图片",
-                None,
             )
 
         logger.warning(f"卡片渲染失败，降级纯文本: dyn_id={dyn_id}")
         return (
             self._build_plain_chain(payload, render_fail=True),
             "降级纯文本",
-            None,
         )
 
     def _build_plain_chain(
@@ -759,8 +836,6 @@ class DynamicListener:
         render_forward = self.renderer.build_render_data(
             item.get("orig", {}), is_forward=True
         )
-        if render_forward.image_urls:
-            render_forward.image_urls = [render_forward.image_urls[0]]
         render_data.forward = render_forward.to_forward_payload()
         return DynamicParseResult.deliver(render_data, dyn_id)
 
