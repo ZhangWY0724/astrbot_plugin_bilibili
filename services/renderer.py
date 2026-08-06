@@ -1,7 +1,7 @@
 import asyncio
 import html
 import os
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from astrbot.api import logger
 from astrbot.api.all import Star
