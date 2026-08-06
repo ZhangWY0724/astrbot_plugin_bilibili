@@ -1,8 +1,9 @@
 ## 未发布
+- 原生动态截图改为连接独立 Browserless 服务，不再在 AstrBot 容器内下载、安装或启动 Chromium；连接异常时继续降级为卡片和纯文本。
+- 新增 `native_browser_ws_url` 与 `native_browser_token` 配置，并移除本地浏览器安装策略 `native_browser_install`。
 - 插件唯一标识调整为 `astrbot_plugin_bilibili_aikaid`，避免与上游插件冲突，并兼容迁移旧标识下的登录凭据和订阅数据。
-- 新增 `render_mode` 三态渲染：纯文本、插件卡片和 Bilibili 原生动态截图。原生模式使用 Playwright 无头 Chromium、复用登录 Cookie 与代理，并在失败时降级。
-- 按 AstrBot 插件规范声明 Playwright Python 依赖；首次原生渲染可按配置自动准备 Chromium 运行时。
-- Linux/Docker 原生截图模式会自动安装 Chromium 系统运行库，并能在浏览器已下载但共享库缺失时自动修复。
+- 新增 `render_mode` 三态渲染：纯文本、插件卡片和 Bilibili 原生动态截图。原生模式复用登录 Cookie 与代理，并在失败时降级。
+- 按 AstrBot 插件规范声明 Playwright Python 客户端依赖，Chromium 运行时由 Browserless 容器管理。
 - 原生动态截图改用 `1920×1080` 桌面视口和 `1` 倍设备像素比，避免非标准宽高比及二倍像素放大。
 - 原生截图改用接口返回的实际 Bilibili 页面地址，视频投稿保持卡片图片；同时隐藏登录浮层和固定导航栏，并逐屏加载长动态图片。
 - 将插件功能收敛为 Bilibili 订阅提醒，保留扫码登录、凭据持久化、订阅管理和定时检测。

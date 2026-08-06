@@ -81,7 +81,10 @@ class Main(Star):
         self.native_renderer = NativeOpusRenderer(
             credential_provider=lambda: self.bili_client.get_credential_dict(),
             proxy=self.proxy,
-            install_mode=self.cfg.get("native_browser_install", "auto"),
+            remote_browser_url=self.cfg.get(
+                "native_browser_ws_url", "ws://browserless:3000"
+            ),
+            remote_browser_token=self.cfg.get("native_browser_token", ""),
             timeout_secs=self.cfg.get("native_browser_timeout_secs", 60),
         )
         self.native_browser_task = None

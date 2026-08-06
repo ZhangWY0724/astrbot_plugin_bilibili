@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import sys
 import tempfile
 from collections.abc import Callable
 from typing import Any, Dict, Optional
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlsplit, urlunsplit
 
 from astrbot.api import logger
 
@@ -20,7 +19,7 @@ VIDEO_DYNAMIC_TYPE = "DYNAMIC_TYPE_AV"
 NATIVE_VIEWPORT_WIDTH = 1920
 NATIVE_VIEWPORT_HEIGHT = 1080
 NATIVE_DEVICE_SCALE_FACTOR = 1
-VALID_INSTALL_MODES = {"auto", "manual", "disable"}
+REMOTE_BROWSER_SCHEMES = {"http", "https", "ws", "wss"}
 
 
 def resolve_render_mode(render_mode: Any, legacy_rai: Any = True) -> str:
@@ -88,6 +87,22 @@ def resolve_bilibili_page_url(target_url: Any, dyn_id: str) -> str:
     return fallback
 
 
+def build_remote_browser_url(endpoint: Any, token: Any = "") -> str:
+    """校验 Browserless 地址，并按需追加鉴权 Token。"""
+    candidate = str(endpoint or "").strip()
+    parsed = urlsplit(candidate)
+    if parsed.scheme.lower() not in REMOTE_BROWSER_SCHEMES or not parsed.hostname:
+        raise ValueError("Browserless 地址必须是有效的 http(s) 或 ws(s) URL")
+
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    normalized_token = str(token or "").strip()
+    if normalized_token:
+        query["token"] = normalized_token
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
+
+
 class NativeOpusRenderer:
     """使用 Playwright 截取 Bilibili 原生动态容器。"""
 
@@ -95,17 +110,14 @@ class NativeOpusRenderer:
         self,
         credential_provider: Callable[[], Optional[Dict[str, Any]]],
         proxy: str = "",
-        install_mode: str = "auto",
+        remote_browser_url: str = "",
+        remote_browser_token: str = "",
         timeout_secs: float = 60,
     ) -> None:
         self.credential_provider = credential_provider
         self.proxy = (proxy or "").strip()
-        normalized_install_mode = str(install_mode or "auto").strip().lower()
-        self.install_mode = (
-            normalized_install_mode
-            if normalized_install_mode in VALID_INSTALL_MODES
-            else "auto"
-        )
+        self.remote_browser_url = str(remote_browser_url or "").strip()
+        self.remote_browser_token = str(remote_browser_token or "").strip()
         self.timeout_ms = max(int(float(timeout_secs) * 1000), 60000)
 
         self._lock = asyncio.Lock()
@@ -114,7 +126,6 @@ class NativeOpusRenderer:
         self._context = None
         self._credential_fingerprint: tuple[tuple[str, str], ...] = ()
         self._output_paths: set[str] = set()
-        self._install_attempted = False
         self._disabled_reason = ""
 
     async def render_dynamic(
@@ -124,8 +135,6 @@ class NativeOpusRenderer:
         normalized_id = str(dyn_id or "").strip()
         if not normalized_id.isdigit():
             logger.warning(f"原生动态渲染跳过无效动态 ID: {normalized_id!r}")
-            return None
-        if self.install_mode == "disable":
             return None
         page_url = resolve_bilibili_page_url(target_url, normalized_id)
 
@@ -144,9 +153,7 @@ class NativeOpusRenderer:
                 return None
 
     async def prepare_browser(self) -> bool:
-        """在插件启动阶段准备 Chromium，避免首次推送才触发下载。"""
-        if self.install_mode == "disable":
-            return False
+        """在插件启动阶段连接 Browserless。"""
         async with self._lock:
             try:
                 if self._browser is not None and self._browser.is_connected():
@@ -156,7 +163,7 @@ class NativeOpusRenderer:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                logger.error(f"插件启动阶段准备 Chromium 失败: {exc}")
+                logger.error(f"插件启动阶段连接 Browserless 失败: {exc}")
                 return False
 
     async def _ensure_context(self):
@@ -178,16 +185,19 @@ class NativeOpusRenderer:
         if self._context is not None:
             await self._context.close()
 
-        self._context = await self._browser.new_context(
-            viewport={
+        context_options: Dict[str, Any] = {
+            "viewport": {
                 "width": NATIVE_VIEWPORT_WIDTH,
                 "height": NATIVE_VIEWPORT_HEIGHT,
             },
-            device_scale_factor=NATIVE_DEVICE_SCALE_FACTOR,
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-            color_scheme="light",
-        )
+            "device_scale_factor": NATIVE_DEVICE_SCALE_FACTOR,
+            "locale": "zh-CN",
+            "timezone_id": "Asia/Shanghai",
+            "color_scheme": "light",
+        }
+        if self.proxy:
+            context_options["proxy"] = {"server": self.proxy}
+        self._context = await self._browser.new_context(**context_options)
         cookies = build_bilibili_cookies(credentials)
         if cookies:
             await self._context.add_cookies(cookies)
@@ -196,6 +206,11 @@ class NativeOpusRenderer:
 
     async def _start_browser(self) -> bool:
         if self._disabled_reason:
+            return False
+
+        if not self.remote_browser_url:
+            self._disabled_reason = "未配置 Browserless 地址"
+            logger.error("原生动态渲染不可用：请配置 Browserless 地址。")
             return False
 
         try:
@@ -207,121 +222,36 @@ class NativeOpusRenderer:
             )
             return False
 
-        launch_options: Dict[str, Any] = {"headless": True}
-        if self.proxy:
-            launch_options["proxy"] = {"server": self.proxy}
-
-        for attempt in range(2):
-            try:
-                self._playwright = await async_playwright().start()
-                self._browser = await self._playwright.chromium.launch(**launch_options)
-                logger.info("Bilibili 原生动态 Chromium 已启动。")
-                return True
-            except asyncio.CancelledError:
-                await self._stop_playwright_driver()
-                raise
-            except Exception as exc:
-                await self._stop_playwright_driver()
-                if (
-                    attempt == 0
-                    and (
-                        self._is_browser_missing_error(exc)
-                        or self._is_browser_dependency_error(exc)
-                    )
-                    and await self._install_chromium(
-                        include_system_deps=sys.platform.startswith("linux")
-                    )
-                ):
-                    continue
-                self._disabled_reason = str(exc)
-                error = str(exc)
-                if self.proxy:
-                    error = error.replace(self.proxy, "[代理地址已隐藏]")
-                logger.error(
-                    "原生动态 Chromium 启动失败，将降级使用卡片或纯文本。"
-                    f" error={error}"
-                )
-                return False
-        return False
-
-    @staticmethod
-    def _is_browser_missing_error(exc: Exception) -> bool:
-        message = str(exc).lower()
-        return (
-            "executable doesn't exist" in message
-            or "executable does not exist" in message
-            or "browser was not found" in message
-        )
-
-    @staticmethod
-    def _is_browser_dependency_error(exc: Exception) -> bool:
-        message = str(exc).lower()
-        return (
-            "host system is missing dependencies" in message
-            or "missing libraries" in message
-            or "error while loading shared libraries" in message
-            or "cannot open shared object file" in message
-        )
-
-    @staticmethod
-    def _build_install_command(include_system_deps: bool) -> tuple[str, ...]:
-        command = [sys.executable, "-m", "playwright", "install"]
-        if include_system_deps:
-            command.append("--with-deps")
-        command.append("chromium")
-        return tuple(command)
-
-    async def _install_chromium(self, include_system_deps: bool = False) -> bool:
-        if self.install_mode != "auto" or self._install_attempted:
-            if self.install_mode == "manual":
-                install_option = " --with-deps" if include_system_deps else ""
-                logger.warning(
-                    "Playwright Chromium 运行环境不完整，请执行 "
-                    f"`python -m playwright install{install_option} chromium`。"
-                )
-            return False
-
-        self._install_attempted = True
-        if include_system_deps:
-            logger.warning(
-                "Playwright Chromium 或其 Linux 系统依赖不完整，开始自动安装。"
-            )
-        else:
-            logger.warning("未检测到 Playwright Chromium，开始首次安装。")
-        env = os.environ.copy()
-        if self.proxy:
-            env.setdefault("HTTPS_PROXY", self.proxy)
-            env.setdefault("HTTP_PROXY", self.proxy)
-
+        endpoint = ""
         try:
-            process = await asyncio.create_subprocess_exec(
-                *self._build_install_command(include_system_deps),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
-                env=env,
+            endpoint = build_remote_browser_url(
+                self.remote_browser_url, self.remote_browser_token
             )
-        except Exception as exc:
-            logger.error(f"无法启动 Playwright Chromium 安装进程: {exc}")
-            return False
-        try:
-            return_code = await asyncio.wait_for(process.wait(), timeout=600)
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.connect_over_cdp(
+                endpoint, timeout=self.timeout_ms
+            )
+            logger.info("Bilibili 原生动态已连接 Browserless。")
+            return True
         except asyncio.CancelledError:
-            process.kill()
-            await process.wait()
+            await self._stop_playwright_driver()
             raise
-        except asyncio.TimeoutError:
-            process.kill()
-            await process.wait()
-            logger.error("Playwright Chromium 运行环境安装超时。")
-            return False
-        if return_code != 0:
+        except Exception as exc:
+            await self._stop_playwright_driver()
+            error = str(exc)
+            for sensitive_value in (
+                endpoint,
+                self.remote_browser_token,
+                self.remote_browser_url,
+                self.proxy,
+            ):
+                if sensitive_value:
+                    error = error.replace(sensitive_value, "[敏感配置已隐藏]")
             logger.error(
-                f"Playwright Chromium 运行环境安装失败，退出码: {return_code}。"
-                "请确认容器基于 Debian/Ubuntu、以 root 运行且软件源网络可用。"
+                "连接 Browserless 失败，将降级使用卡片或纯文本。"
+                f" error={error}"
             )
             return False
-        logger.info("Playwright Chromium 运行环境安装完成。")
-        return True
 
     async def _capture(self, context, dyn_id: str, page_url: str) -> Optional[str]:
         page = await context.new_page()

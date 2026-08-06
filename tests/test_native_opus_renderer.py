@@ -4,6 +4,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 class _Logger:
@@ -100,38 +101,44 @@ class BrowserRuntimeTests(unittest.TestCase):
             "https://www.bilibili.com/opus/456",
         )
 
-    def test_detects_missing_executable(self):
-        self.assertTrue(
-            MODULE.NativeOpusRenderer._is_browser_missing_error(
-                RuntimeError("Executable doesn't exist at /cache/chromium")
-            )
+    def test_builds_authenticated_remote_browser_url(self):
+        self.assertEqual(
+            MODULE.build_remote_browser_url(
+                "ws://browserless:3000?existing=value", "secret token"
+            ),
+            "ws://browserless:3000?existing=value&token=secret+token",
         )
 
-    def test_detects_missing_linux_browser_dependencies(self):
-        self.assertTrue(
-            MODULE.NativeOpusRenderer._is_browser_dependency_error(
-                RuntimeError(
-                    "Host system is missing dependencies to run browsers. "
-                    "Missing libraries: libnss3.so"
-                )
-            )
-        )
-        self.assertTrue(
-            MODULE.NativeOpusRenderer._is_browser_dependency_error(
-                RuntimeError(
-                    "error while loading shared libraries: libgbm.so.1: "
-                    "cannot open shared object file"
-                )
-            )
-        )
+    def test_rejects_invalid_remote_browser_url(self):
+        with self.assertRaisesRegex(ValueError, "Browserless 地址"):
+            MODULE.build_remote_browser_url("browserless:3000", "secret")
 
-    def test_linux_install_command_includes_system_dependencies(self):
-        command = MODULE.NativeOpusRenderer._build_install_command(True)
-        self.assertEqual(command[-3:], ("install", "--with-deps", "chromium"))
 
-    def test_non_linux_install_command_only_installs_browser(self):
-        command = MODULE.NativeOpusRenderer._build_install_command(False)
-        self.assertEqual(command[-2:], ("install", "chromium"))
+class _FakeChromium:
+    def __init__(self):
+        self.endpoint = ""
+        self.timeout = 0
+
+    async def connect_over_cdp(self, endpoint, *, timeout):
+        self.endpoint = endpoint
+        self.timeout = timeout
+        return _FakeBrowser()
+
+
+class _FakePlaywright:
+    def __init__(self):
+        self.chromium = _FakeChromium()
+
+    async def stop(self):
+        return None
+
+
+class _FakePlaywrightStarter:
+    def __init__(self, playwright):
+        self.playwright = playwright
+
+    async def start(self):
+        return self.playwright
 
 
 class _FakeBrowserContext:
@@ -151,8 +158,35 @@ class _FakeBrowser:
 
 
 class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
+    async def test_connects_to_browserless_over_cdp(self):
+        playwright = _FakePlaywright()
+        async_api_module = types.ModuleType("playwright.async_api")
+        async_api_module.async_playwright = lambda: _FakePlaywrightStarter(playwright)
+        playwright_module = types.ModuleType("playwright")
+        playwright_module.async_api = async_api_module
+        renderer = MODULE.NativeOpusRenderer(
+            lambda: {},
+            remote_browser_url="ws://browserless:3000",
+            remote_browser_token="secret token",
+        )
+
+        with patch.dict(
+            sys.modules,
+            {
+                "playwright": playwright_module,
+                "playwright.async_api": async_api_module,
+            },
+        ):
+            self.assertTrue(await renderer._start_browser())
+
+        self.assertEqual(
+            playwright.chromium.endpoint,
+            "ws://browserless:3000?token=secret+token",
+        )
+        self.assertEqual(playwright.chromium.timeout, 60000)
+
     async def test_uses_full_hd_viewport_without_pixel_upscaling(self):
-        renderer = MODULE.NativeOpusRenderer(lambda: {}, install_mode="manual")
+        renderer = MODULE.NativeOpusRenderer(lambda: {})
         browser = _FakeBrowser()
         renderer._browser = browser
 
@@ -163,6 +197,19 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
             {"width": 1920, "height": 1080},
         )
         self.assertEqual(browser.context_options["device_scale_factor"], 1)
+
+    async def test_applies_proxy_to_remote_browser_context(self):
+        renderer = MODULE.NativeOpusRenderer(
+            lambda: {}, proxy="http://proxy:7890"
+        )
+        browser = _FakeBrowser()
+        renderer._browser = browser
+
+        await renderer._ensure_context()
+
+        self.assertEqual(
+            browser.context_options["proxy"], {"server": "http://proxy:7890"}
+        )
 
 
 class _FakeContainer:
@@ -217,7 +264,7 @@ class _FakeContext:
 
 class CaptureTests(unittest.IsolatedAsyncioTestCase):
     async def test_capture_uses_actual_url_and_hides_page_overlays(self):
-        renderer = MODULE.NativeOpusRenderer(lambda: {}, install_mode="manual")
+        renderer = MODULE.NativeOpusRenderer(lambda: {})
         context = _FakeContext()
         page_url = "https://www.bilibili.com/opus/123456"
         output_path = await renderer._capture(context, "123456", page_url)
@@ -244,13 +291,8 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(os.path.exists(output_path))
 
     async def test_invalid_dynamic_id_does_not_open_browser(self):
-        renderer = MODULE.NativeOpusRenderer(lambda: {}, install_mode="manual")
+        renderer = MODULE.NativeOpusRenderer(lambda: {})
         self.assertIsNone(await renderer.render_dynamic("not-a-number"))
-        self.assertFalse(
-            MODULE.NativeOpusRenderer._is_browser_missing_error(
-                RuntimeError("net::ERR_PROXY_CONNECTION_FAILED")
-            )
-        )
 
 
 if __name__ == "__main__":

@@ -43,12 +43,17 @@
         "options": ["auto", "plain", "card", "native"],
         "default": "auto"
     },
-    "native_browser_install": {
-        "description": "原生渲染浏览器安装策略",
+    "native_browser_ws_url": {
+        "description": "Browserless 地址",
         "type": "string",
-        "hint": "auto 首次使用时自动安装 Chromium，并在 Linux 下自动补齐系统运行库；manual 仅提示手动安装；disable 禁用原生浏览器。",
-        "options": ["auto", "manual", "disable"],
-        "default": "auto"
+        "hint": "Browserless 的内部连接地址，例如 ws://browserless:3000。原生模式仅使用远程浏览器，不会在 AstrBot 容器内安装 Chromium。",
+        "default": "ws://browserless:3000"
+    },
+    "native_browser_token": {
+        "description": "Browserless Token",
+        "type": "string",
+        "hint": "与 Browserless 容器 TOKEN 环境变量保持一致，留空表示不鉴权。Token 不会写入插件日志。",
+        "default": ""
     },
     "native_browser_timeout_secs": {
         "description": "原生页面截图超时",

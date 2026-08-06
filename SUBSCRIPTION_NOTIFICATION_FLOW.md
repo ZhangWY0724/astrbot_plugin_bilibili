@@ -250,9 +250,9 @@ UID -> [(UMO, SubscriptionRecord), ...]
 - `auto` 根据旧版 `rai` 布尔配置兼容为 `plain` 或 `card`。
 - `plain` 直接组装文本消息。
 - `card` 使用 AstrBot `html_render()` 生成插件自定义图片卡片。
-- `native` 使用独立的 Playwright Chromium 打开 `https://www.bilibili.com/opus/{dyn_id}`，等待 `.bili-opus-view` 可见并对该元素截图。
+- `native` 通过 Browserless Chromium 打开 `https://www.bilibili.com/opus/{dyn_id}`，等待 `.bili-opus-view` 可见并对该元素截图。
 
-原生模式失败降级为卡片，卡片失败再降级为纯文本。原生渲染器懒启动并复用 Chromium；每条动态使用独立页面，插件终止时关闭浏览器。
+原生模式失败降级为卡片，卡片失败再降级为纯文本。原生渲染器复用 Browserless 连接；每条动态使用独立页面，插件终止时关闭连接。
 
 ### 10.2 图片卡片模式
 
@@ -270,7 +270,7 @@ UID -> [(UMO, SubscriptionRecord), ...]
 
 原生模式不改变动态 API 的新旧判断和过滤逻辑，只把已通过过滤的动态 ID 转换为固定的 `opus/{dyn_id}` 地址。浏览器上下文使用现有扫码登录或 `sessdata` 凭据对应的 Cookie，并复用 `proxy`。
 
-首次启动时若缺少 Chromium，或启动错误表明 Linux 共享库缺失，`native_browser_install=auto` 会自动修复运行环境。Linux 执行 `python -m playwright install --with-deps chromium`，其他系统执行 `python -m playwright install chromium`；`manual` 只记录对应的手动安装提示；`disable` 不启动浏览器。安装或启动失败不会终止订阅轮询。
+插件通过 `native_browser_ws_url` 连接 Browserless，并使用 `native_browser_token` 完成鉴权。AstrBot 容器不安装 Chromium、不执行系统包管理命令；Browserless 不可用时不会终止订阅轮询，而是进入现有降级链。
 
 页面等待顺序为：DOM 加载、`.bili-opus-view` 可见、字体就绪、容器内图片加载、布局稳定，随后执行元素级 JPEG 截图。
 

@@ -37,13 +37,13 @@ plugin i https://github.com/ZhangWY0724/astrbot_plugin_bilibili
 - `auto`：兼容旧版 `rai` 配置；`rai=true` 使用插件卡片，`rai=false` 使用纯文本。
 - `plain`：纯文本消息。
 - `card`：使用 AstrBot HTML 模板生成图片卡片。
-- `native`：使用插件自带的 Playwright 无头 Chromium 打开 `https://www.bilibili.com/opus/{动态ID}`，截取 Bilibili 页面中的 `.bili-opus-view` 容器。
+- `native`：通过 Browserless Chromium 打开 `https://www.bilibili.com/opus/{动态ID}`，截取 Bilibili 页面中的 `.bili-opus-view` 容器。
 
-`native` 模式失败时会自动降级为 `card`，卡片也失败时再降级为纯文本。原生模式首次使用可能需要下载 Chromium；可通过 `native_browser_install` 选择 `auto`、`manual` 或 `disable`。Python 依赖由插件目录下的 `requirements.txt` 按 AstrBot 规范安装，Chromium 浏览器运行时不打包进插件仓库。
+`native` 模式失败时会自动降级为 `card`，卡片也失败时再降级为纯文本。插件仅保留 Playwright Python 客户端，不会在 AstrBot 容器内下载、安装或启动 Chromium。
 
-启用 `native` 后，插件加载完成会在后台自动准备 Playwright Chromium；因此 Python 的 `playwright` 依赖安装成功后，会在插件启动阶段继续自动下载 Chromium，不必等到第一条订阅推送才开始。Linux 环境使用 `auto` 时还会自动补齐 Chromium 系统运行库，适配以 root 运行的 Debian/Ubuntu Docker 容器。下载或系统依赖安装失败不会阻止插件启动，并会按上述规则降级渲染。
+启用 `native` 前需独立部署 Browserless，并确保其与 AstrBot 容器位于同一个 Docker 网络。`native_browser_ws_url` 填写内部地址，例如 `ws://browserless:3000`；`native_browser_token` 与 Browserless 容器的 `TOKEN` 环境变量保持一致。连接失败不会阻止插件启动，并会按上述规则降级渲染。
 
-原生渲染使用配置项 `proxy`，与 Bilibili API 请求共用代理；扫码登录和持久化凭据会转换为浏览器 Cookie 使用，不会新增登录体系。
+原生渲染使用配置项 `proxy`，与 Bilibili API 请求共用代理；该代理地址必须能从 Browserless 容器访问。扫码登录和持久化凭据会转换为浏览器 Cookie 使用，不会新增登录体系。
 
 原生页面默认使用 `1920×1080` 桌面视口和 `1` 倍设备像素比，再对 `.bili-opus-view` 动态主体执行元素截图；输出尺寸由动态主体实际高度决定，不会填充为固定的整屏画布。
 
