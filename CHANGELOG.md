@@ -1,4 +1,6 @@
 ## 未发布
+- 兼容 `t.bilibili.com/{动态ID}` 和直接 `/{动态ID}` 页面，按链接形态选择 `.bili-dyn-item` 或 `.bili-opus-view` 原生动态主体，修复元素截图区域偏移。
+- 为原生截图增加高度、像素总量、懒加载滚动次数和输出文件大小硬限制；超限时降级卡片，降低长动态造成瞬时内存峰值的风险。
 - 原生动态截图改为连接独立 Browserless 服务，不再在 AstrBot 容器内下载、安装或启动 Chromium；连接异常时继续降级为卡片和纯文本。
 - 新增 `native_browser_ws_url` 与 `native_browser_token` 配置，并移除本地浏览器安装策略 `native_browser_install`。
 - 插件唯一标识调整为 `astrbot_plugin_bilibili_aikaid`，避免与上游插件冲突，并兼容迁移旧标识下的登录凭据和订阅数据。

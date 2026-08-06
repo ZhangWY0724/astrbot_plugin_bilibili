@@ -11,6 +11,7 @@ from astrbot.api import logger
 
 OPUS_URL_TEMPLATE = "https://www.bilibili.com/opus/{dyn_id}"
 OPUS_SELECTOR = ".bili-opus-view"
+DYNAMIC_SELECTOR = ".bili-dyn-item"
 OBSTRUCTIVE_PAGE_SELECTORS = (
     ".v-popover-content",
     ".bili-header__bar.mini-header",
@@ -19,6 +20,11 @@ VIDEO_DYNAMIC_TYPE = "DYNAMIC_TYPE_AV"
 NATIVE_VIEWPORT_WIDTH = 1920
 NATIVE_VIEWPORT_HEIGHT = 1080
 NATIVE_DEVICE_SCALE_FACTOR = 1
+MAX_CAPTURE_WIDTH = 1200
+MAX_CAPTURE_HEIGHT = 6000
+MAX_CAPTURE_PIXELS = 6_000_000
+MAX_LAZY_SCROLL_STEPS = 8
+MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 REMOTE_BROWSER_SCHEMES = {"http", "https", "ws", "wss"}
 
 
@@ -100,6 +106,37 @@ def build_remote_browser_url(endpoint: Any, token: Any = "") -> str:
         query["token"] = normalized_token
     return urlunsplit(
         (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
+    )
+
+
+def resolve_capture_selectors(page_url: Any) -> tuple[str, str]:
+    """根据动态链接形态确定页面主体选择器优先级。"""
+    try:
+        parsed = urlparse(str(page_url or ""))
+    except ValueError:
+        return OPUS_SELECTOR, DYNAMIC_SELECTOR
+    path_parts = [part for part in parsed.path.split("/") if part]
+    is_direct_dynamic = parsed.hostname == "t.bilibili.com" or (
+        len(path_parts) == 1 and path_parts[0].isdigit()
+    )
+    if is_direct_dynamic:
+        return DYNAMIC_SELECTOR, OPUS_SELECTOR
+    return OPUS_SELECTOR, DYNAMIC_SELECTOR
+
+
+def is_capture_box_safe(box: Optional[Dict[str, Any]]) -> bool:
+    """限制元素截图尺寸，避免 Chromium 创建超大位图。"""
+    if not box:
+        return False
+    try:
+        width = float(box["width"])
+        height = float(box["height"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return (
+        100 <= width <= MAX_CAPTURE_WIDTH
+        and 80 <= height <= MAX_CAPTURE_HEIGHT
+        and width * height <= MAX_CAPTURE_PIXELS
     )
 
 
@@ -260,8 +297,7 @@ class NativeOpusRenderer:
             await page.goto(
                 page_url, wait_until="domcontentloaded", timeout=self.timeout_ms
             )
-            container = page.locator(OPUS_SELECTOR).first
-            await container.wait_for(state="visible", timeout=self.timeout_ms)
+            container, capture_selector = await self._resolve_container(page, page_url)
             await page.evaluate(
                 """selectors => {
                     selectors.forEach(selector => {
@@ -278,7 +314,11 @@ class NativeOpusRenderer:
                 list(OBSTRUCTIVE_PAGE_SELECTORS),
             )
             await page.evaluate("() => document.fonts.ready")
-            await self._trigger_lazy_loading(page)
+            initial_box = await container.bounding_box()
+            if not self._validate_capture_box(dyn_id, capture_selector, initial_box):
+                return None
+
+            await self._trigger_lazy_loading(page, capture_selector)
             try:
                 await page.wait_for_function(
                     """selector => {
@@ -288,7 +328,7 @@ class NativeOpusRenderer:
                             img => img.complete && img.naturalWidth > 0
                         );
                     }""",
-                    arg=OPUS_SELECTOR,
+                    arg=capture_selector,
                     timeout=self.timeout_ms,
                 )
             except Exception:
@@ -296,8 +336,7 @@ class NativeOpusRenderer:
 
             await self._wait_for_stable_layout(container)
             box = await container.bounding_box()
-            if not box or box["width"] < 100 or box["height"] < 80:
-                logger.warning(f"原生动态容器尺寸异常: dyn_id={dyn_id} box={box}")
+            if not self._validate_capture_box(dyn_id, capture_selector, box):
                 return None
 
             with tempfile.NamedTemporaryFile(
@@ -307,43 +346,84 @@ class NativeOpusRenderer:
             await container.screenshot(
                 path=output_path,
                 type="jpeg",
-                quality=95,
+                quality=85,
                 animations="disabled",
                 timeout=self.timeout_ms,
             )
-            if os.path.exists(output_path) and os.path.getsize(output_path) > 4096:
+            output_size = os.path.getsize(output_path) if os.path.exists(output_path) else 0
+            if 4096 < output_size <= MAX_OUTPUT_BYTES:
                 self._output_paths.add(output_path)
                 return output_path
+            if output_size > MAX_OUTPUT_BYTES:
+                logger.warning(
+                    f"原生动态截图文件过大，降级卡片: dyn_id={dyn_id} "
+                    f"size={output_size}"
+                )
             return None
         finally:
             await page.close()
-            if output_path and (
-                not os.path.exists(output_path) or os.path.getsize(output_path) <= 4096
-            ):
+            if output_path and output_path not in self._output_paths:
                 try:
                     os.remove(output_path)
                 except OSError:
                     pass
 
+    async def _resolve_container(self, page, page_url: str):
+        selectors = resolve_capture_selectors(page_url)
+        await page.wait_for_function(
+            """selectors => selectors.some(selector => {
+                const element = document.querySelector(selector);
+                if (!element) return false;
+                const style = getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                return style.display !== 'none'
+                    && style.visibility !== 'hidden'
+                    && rect.width > 0
+                    && rect.height > 0;
+            })""",
+            arg=list(selectors),
+            timeout=self.timeout_ms,
+        )
+        for selector in selectors:
+            container = page.locator(selector).first
+            if await container.is_visible():
+                return container, selector
+        raise RuntimeError("未找到可见的 Bilibili 动态主体")
+
     @staticmethod
-    async def _trigger_lazy_loading(page) -> None:
+    def _validate_capture_box(
+        dyn_id: str, selector: str, box: Optional[Dict[str, Any]]
+    ) -> bool:
+        if is_capture_box_safe(box):
+            return True
+        logger.warning(
+            f"原生动态容器尺寸超限，降级卡片: dyn_id={dyn_id} "
+            f"selector={selector} box={box}"
+        )
+        return False
+
+    @staticmethod
+    async def _trigger_lazy_loading(page, selector: str) -> None:
         """逐屏滚动动态主体，触发视口外图片的懒加载。"""
         await page.evaluate(
-            """async selector => {
+            """async options => {
+                const { selector, maxSteps } = options;
                 const root = document.querySelector(selector);
                 if (!root) return;
                 const rect = root.getBoundingClientRect();
                 const start = Math.max(0, rect.top + window.scrollY);
                 const end = start + Math.max(rect.height, root.scrollHeight);
                 const step = Math.max(400, Math.floor(window.innerHeight * 0.8));
-                for (let y = start; y < end; y += step) {
+                let steps = 0;
+                for (let y = start; y < end && steps < maxSteps; y += step) {
                     window.scrollTo(0, y);
                     await new Promise(resolve => setTimeout(resolve, 250));
+                    steps += 1;
                 }
                 window.scrollTo(0, start);
                 await new Promise(resolve => setTimeout(resolve, 500));
             }""",
-            OPUS_SELECTOR,
+            {"selector": selector, "maxSteps": MAX_LAZY_SCROLL_STEPS},
         )
 
     @staticmethod

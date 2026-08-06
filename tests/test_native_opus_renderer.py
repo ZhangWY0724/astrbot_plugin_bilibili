@@ -113,6 +113,35 @@ class BrowserRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Browserless 地址"):
             MODULE.build_remote_browser_url("browserless:3000", "secret")
 
+    def test_selects_dynamic_container_for_direct_url(self):
+        self.assertEqual(
+            MODULE.resolve_capture_selectors("https://t.bilibili.com/123456"),
+            (MODULE.DYNAMIC_SELECTOR, MODULE.OPUS_SELECTOR),
+        )
+        self.assertEqual(
+            MODULE.resolve_capture_selectors("https://www.bilibili.com/123456"),
+            (MODULE.DYNAMIC_SELECTOR, MODULE.OPUS_SELECTOR),
+        )
+
+    def test_selects_opus_container_for_opus_url(self):
+        self.assertEqual(
+            MODULE.resolve_capture_selectors(
+                "https://www.bilibili.com/opus/123456"
+            ),
+            (MODULE.OPUS_SELECTOR, MODULE.DYNAMIC_SELECTOR),
+        )
+
+    def test_rejects_oversized_capture_box(self):
+        self.assertTrue(
+            MODULE.is_capture_box_safe({"width": 708, "height": 6000})
+        )
+        self.assertFalse(
+            MODULE.is_capture_box_safe({"width": 708, "height": 6001})
+        )
+        self.assertFalse(
+            MODULE.is_capture_box_safe({"width": 1200, "height": 6000})
+        )
+
 
 class _FakeChromium:
     def __init__(self):
@@ -213,15 +242,24 @@ class BrowserContextTests(unittest.IsolatedAsyncioTestCase):
 
 
 class _FakeContainer:
-    async def wait_for(self, **_kwargs):
-        return None
+    def __init__(self, *, visible=True, box=None, output_size=5000):
+        self.visible = visible
+        self.box = box or {"width": 708, "height": 320}
+        self.output_size = output_size
+        self.screenshot_called = False
+        self.screenshot_path = ""
+
+    async def is_visible(self):
+        return self.visible
 
     async def bounding_box(self):
-        return {"width": 708, "height": 320}
+        return self.box
 
     async def screenshot(self, *, path, **_kwargs):
+        self.screenshot_called = True
+        self.screenshot_path = path
         with open(path, "wb") as output:
-            output.write(b"x" * 5000)
+            output.write(b"x" * self.output_size)
 
 
 class _FakeLocator:
@@ -230,8 +268,10 @@ class _FakeLocator:
 
 
 class _FakePage:
-    def __init__(self):
-        self.container = _FakeContainer()
+    def __init__(self, *, active_selector=None, box=None, output_size=5000):
+        self.active_selector = active_selector or MODULE.OPUS_SELECTOR
+        self.container = _FakeContainer(box=box, output_size=output_size)
+        self.hidden_container = _FakeContainer(visible=False)
         self.goto_url = ""
         self.closed = False
         self.evaluate_calls = []
@@ -240,8 +280,10 @@ class _FakePage:
         self.goto_url = url
 
     def locator(self, selector):
-        assert selector == MODULE.OPUS_SELECTOR
-        return _FakeLocator(self.container)
+        container = (
+            self.container if selector == self.active_selector else self.hidden_container
+        )
+        return _FakeLocator(container)
 
     async def evaluate(self, expression, arg=None):
         self.evaluate_calls.append((expression, arg))
@@ -255,8 +297,8 @@ class _FakePage:
 
 
 class _FakeContext:
-    def __init__(self):
-        self.page = _FakePage()
+    def __init__(self, **page_options):
+        self.page = _FakePage(**page_options)
 
     async def new_page(self):
         return self.page
@@ -279,7 +321,12 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertTrue(
             any(
-                arg == MODULE.OPUS_SELECTOR and "window.scrollTo" in expression
+                arg
+                == {
+                    "selector": MODULE.OPUS_SELECTOR,
+                    "maxSteps": MODULE.MAX_LAZY_SCROLL_STEPS,
+                }
+                and "window.scrollTo" in expression
                 for expression, arg in context.page.evaluate_calls
             )
         )
@@ -289,6 +336,55 @@ class CaptureTests(unittest.IsolatedAsyncioTestCase):
 
         renderer.release_output(output_path)
         self.assertFalse(os.path.exists(output_path))
+
+    async def test_direct_dynamic_uses_bili_dyn_item(self):
+        renderer = MODULE.NativeOpusRenderer(lambda: {})
+        context = _FakeContext(active_selector=MODULE.DYNAMIC_SELECTOR)
+        page_url = "https://t.bilibili.com/123456"
+
+        output_path = await renderer._capture(context, "123456", page_url)
+
+        self.assertTrue(output_path and os.path.exists(output_path))
+        self.assertTrue(
+            any(
+                arg
+                == {
+                    "selector": MODULE.DYNAMIC_SELECTOR,
+                    "maxSteps": MODULE.MAX_LAZY_SCROLL_STEPS,
+                }
+                for _, arg in context.page.evaluate_calls
+            )
+        )
+        renderer.release_output(output_path)
+
+    async def test_oversized_container_skips_screenshot(self):
+        renderer = MODULE.NativeOpusRenderer(lambda: {})
+        context = _FakeContext(box={"width": 708, "height": 6001})
+
+        output_path = await renderer._capture(
+            context,
+            "123456",
+            "https://www.bilibili.com/opus/123456",
+        )
+
+        self.assertIsNone(output_path)
+        self.assertFalse(context.page.container.screenshot_called)
+        self.assertTrue(context.page.closed)
+
+    async def test_oversized_output_is_removed(self):
+        renderer = MODULE.NativeOpusRenderer(lambda: {})
+        context = _FakeContext(output_size=5000)
+
+        with patch.object(MODULE, "MAX_OUTPUT_BYTES", 4500):
+            output_path = await renderer._capture(
+                context,
+                "123456",
+                "https://www.bilibili.com/opus/123456",
+            )
+
+        self.assertIsNone(output_path)
+        self.assertTrue(context.page.container.screenshot_called)
+        self.assertFalse(os.path.exists(context.page.container.screenshot_path))
 
     async def test_invalid_dynamic_id_does_not_open_browser(self):
         renderer = MODULE.NativeOpusRenderer(lambda: {})
